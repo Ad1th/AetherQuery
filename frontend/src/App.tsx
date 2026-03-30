@@ -36,8 +36,11 @@ function App() {
   const [suggestedQueries, setSuggestedQueries] = useState<string[]>([]);
   const [loadingExact, setLoadingExact] = useState(false);
   const [loadingApprox, setLoadingApprox] = useState(false);
-  const [progressExact, setProgressExact] = useState<ExecutionProgress | null>(null);
-  const [progressApprox, setProgressApprox] = useState<ExecutionProgress | null>(null);
+  const [progressExact, setProgressExact] = useState<ExecutionProgress | null>(
+    null,
+  );
+  const [progressApprox, setProgressApprox] =
+    useState<ExecutionProgress | null>(null);
   const [accuracyEnabledApprox, setAccuracyEnabledApprox] = useState(false);
   const [accuracyTargetApprox, setAccuracyTargetApprox] = useState(92);
 
@@ -58,7 +61,9 @@ function App() {
     const poll = async () => {
       if (!active) return;
       try {
-        const res = await fetch(`${backend}/api/sql/execute/progress/${requestId}`);
+        const res = await fetch(
+          `${backend}/api/sql/execute/progress/${requestId}`,
+        );
         if (res.ok) {
           const data = (await res.json()) as ExecutionProgress;
           setProgress(data);
@@ -147,7 +152,8 @@ function App() {
     const setError = panel === "exact" ? setErrorExact : setErrorApprox;
     const setResult = panel === "exact" ? setResultExact : setResultApprox;
     const setLoading = panel === "exact" ? setLoadingExact : setLoadingApprox;
-    const setProgress = panel === "exact" ? setProgressExact : setProgressApprox;
+    const setProgress =
+      panel === "exact" ? setProgressExact : setProgressApprox;
     if (!query.trim()) return;
     setError(null);
     setProgress(null);
@@ -218,10 +224,14 @@ function App() {
             style={{ accentColor: "#f5b84a" }}
           />
           <div>
-            <div style={{ fontSize: "12px", color: "#f0d2a3", fontWeight: 700 }}>
+            <div
+              style={{ fontSize: "12px", color: "#f0d2a3", fontWeight: 700 }}
+            >
               Accuracy-Speed Tradeoff
             </div>
-            <div style={{ fontSize: "11px", color: "#b5976b", marginTop: "2px" }}>
+            <div
+              style={{ fontSize: "11px", color: "#b5976b", marginTop: "2px" }}
+            >
               Optional. Enable only if you want a specific target.
             </div>
           </div>
@@ -279,10 +289,13 @@ function App() {
                 accuracyTargetApprox === preset.value
                   ? "rgba(245,184,74,0.18)"
                   : "rgba(255,255,255,0.03)",
-              color: accuracyTargetApprox === preset.value ? "#fff0cf" : "#bcb2a1",
+              color:
+                accuracyTargetApprox === preset.value ? "#fff0cf" : "#bcb2a1",
             }}
           >
-            <div style={{ fontSize: "12px", fontWeight: 700 }}>{preset.label}</div>
+            <div style={{ fontSize: "12px", fontWeight: 700 }}>
+              {preset.label}
+            </div>
             <div style={{ fontSize: "10px", marginTop: "2px" }}>
               {preset.value}% • {preset.note}
             </div>
@@ -367,12 +380,18 @@ function App() {
                 </div>
               )}
               {typeof progress.accuracy_target === "number" && (
-                <div>Target accuracy: {progress.accuracy_target.toFixed(0)}%</div>
+                <div>
+                  Target accuracy: {progress.accuracy_target.toFixed(0)}%
+                </div>
               )}
               {progress.iterations && progress.iterations.length > 0 && (
                 <div>
                   Latest iteration: sampled{" "}
-                  {progress.iterations[progress.iterations.length - 1].rows_sampled} rows
+                  {
+                    progress.iterations[progress.iterations.length - 1]
+                      .rows_sampled
+                  }{" "}
+                  rows
                 </div>
               )}
             </div>
@@ -420,7 +439,9 @@ function App() {
             {result.accuracy_target && (
               <span>
                 Accuracy target:{" "}
-                <span style={{ color: "#f0d2a3" }}>{result.accuracy_target}%</span>
+                <span style={{ color: "#f0d2a3" }}>
+                  {result.accuracy_target}%
+                </span>
               </span>
             )}
             <span>
@@ -615,9 +636,9 @@ function App() {
               gap: "8px",
               padding: "6px 10px",
               borderRadius: "999px",
-              background: "rgba(90,170,245,0.12)",
-              border: "0.5px solid rgba(90,170,245,0.24)",
-              color: "#9dccfb",
+              // background: "rgba(90,170,245,0.12)",
+              // border: "0.5px solid rgba(90,170,245,0.24)",
+              // color: "#9dccfb",
               fontSize: "11px",
               fontWeight: 700,
               letterSpacing: "0.3px",
@@ -1206,9 +1227,7 @@ function App() {
         </div>
 
         {/* Comparison Section - TODO: Fix JSX structure */}
-        {false && (
-          <div>Placeholder</div>
-        )}
+        {false && <div>Placeholder</div>}
       </div>
     </>
   );
