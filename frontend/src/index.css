@@ -27,7 +27,10 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
-  background: #0f0f0f;
+  background:
+    radial-gradient(circle at top left, rgba(90, 170, 245, 0.12), transparent 24%),
+    radial-gradient(circle at top right, rgba(245, 184, 74, 0.08), transparent 20%),
+    #0f0f0f;
 }
 
 h1 {
@@ -52,7 +55,7 @@ button {
     transform 0.1s;
 }
 button:hover {
-  opacity: 0.85;
+  opacity: 0.92;
 }
 button:active {
   transform: scale(0.97);

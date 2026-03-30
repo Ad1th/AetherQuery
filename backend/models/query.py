@@ -6,6 +6,7 @@ class ExecuteRequest(BaseModel):
     mode: str = Field(default="exact")
     source: str = Field(default="duckdb")
     request_id: str | None = None
+    accuracy_target: float | None = Field(default=None, ge=50.0, le=99.9)
 
 
 class PlanRequest(BaseModel):

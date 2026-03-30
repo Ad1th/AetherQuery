@@ -71,6 +71,7 @@ def run_benchmark(
     query: str,
     source: str,
     approx_mode: str = "balanced",
+    accuracy_target: float | None = None,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     parsed = parse_analytical_query(query)
@@ -79,7 +80,13 @@ def run_benchmark(
     exact_payload = run_exact(query, source)
     if progress_callback is not None:
         progress_callback({"phase": "approx", "message": "Running approximate query"})
-    approx_payload = run_runtime_sampling(parsed, source, approx_mode, progress_callback=progress_callback)
+    approx_payload = run_runtime_sampling(
+        parsed,
+        source,
+        approx_mode,
+        accuracy_target=accuracy_target,
+        progress_callback=progress_callback,
+    )
 
     exact_result_map = _normalize_exact_result(parsed, exact_payload)
     approx_result_map = approx_payload["result_map"]
@@ -91,6 +98,7 @@ def run_benchmark(
         "benchmark": True,
         "source": source,
         "approx_mode": approx_mode,
+        "accuracy_target": accuracy_target,
         "exact": {
             "result": exact_payload.get("result"),
             "columns": exact_payload.get("columns", []),
@@ -102,6 +110,7 @@ def run_benchmark(
             "columns": approx_payload.get("columns", []),
             "time": approx_time,
             "sample_rate": approx_payload.get("sample_rate"),
+            "accuracy_target": approx_payload.get("accuracy_target"),
             "iterations": approx_payload.get("iterations", []),
             "stop_reason": approx_payload.get("stop_reason"),
         },

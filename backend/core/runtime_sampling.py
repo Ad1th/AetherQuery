@@ -27,6 +27,39 @@ MODE_CONFIGS: dict[str, dict[str, Any]] = {
     },
 }
 
+BASE_PROGRESSIONS = [0.01, 0.05, 0.10, 0.25, 0.50, 0.75, 1.00]
+
+
+def _derive_accuracy_config(mode: str, accuracy_target: float | None) -> dict[str, Any]:
+    mode_key = mode if mode in MODE_CONFIGS else "balanced"
+    config = dict(MODE_CONFIGS[mode_key])
+    if accuracy_target is None:
+        return config
+
+    target = max(50.0, min(99.9, float(accuracy_target)))
+    error_budget = max(0.005, min(0.20, 1.0 - (target / 100.0)))
+    if target >= 98.0:
+        max_fraction = 1.0
+    elif target >= 95.0:
+        max_fraction = 0.75
+    elif target >= 90.0:
+        max_fraction = 0.50
+    elif target >= 85.0:
+        max_fraction = 0.25
+    else:
+        max_fraction = 0.10
+
+    progression = [fraction for fraction in BASE_PROGRESSIONS if fraction <= max_fraction]
+    if not progression or progression[-1] != max_fraction:
+        progression.append(max_fraction)
+
+    time_budget = max(0.5, min(5.0, 0.6 + ((target - 50.0) / 49.9) * 4.0))
+    config["progression"] = progression
+    config["convergence_threshold"] = error_budget
+    config["time_budget_seconds"] = time_budget
+    config["accuracy_target"] = target
+    return config
+
 
 def _safe_relative_error(previous: float | int | None, current: float | int | None) -> float:
     if previous is None or current is None:
@@ -69,10 +102,11 @@ def run_runtime_sampling(
     parsed: ParsedQuery,
     source: str,
     mode: str,
+    accuracy_target: float | None = None,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     mode_key = mode if mode in MODE_CONFIGS else "balanced"
-    config = MODE_CONFIGS[mode_key]
+    config = _derive_accuracy_config(mode_key, accuracy_target)
     start = time.time()
     previous_map: Any = None
     final_payload: dict[str, Any] | None = None
@@ -85,8 +119,13 @@ def run_runtime_sampling(
             progress_callback(
                 {
                     "phase": "sampling",
-                    "message": f"Sampling {sample_fraction * 100:.0f}% of rows",
+                    "message": (
+                        f"Sampling {sample_fraction * 100:.0f}% of rows"
+                        if accuracy_target is None
+                        else f"Sampling {sample_fraction * 100:.0f}% for {config['accuracy_target']:.0f}% target"
+                    ),
                     "current_sample_fraction": sample_fraction,
+                    "accuracy_target": config.get("accuracy_target"),
                 }
             )
         frame, query_time, sample_query = fetch_sample_frame(parsed, source, sample_fraction)
@@ -109,6 +148,7 @@ def run_runtime_sampling(
                     "phase": "sampling",
                     "message": f"Processed sample {sample_fraction * 100:.0f}%",
                     "current_sample_fraction": sample_fraction,
+                    "accuracy_target": config.get("accuracy_target"),
                     "latest_iteration": iteration_detail,
                 }
             )
@@ -134,6 +174,7 @@ def run_runtime_sampling(
                 "phase": "finalizing",
                 "message": "Finalizing approximate result",
                 "current_sample_fraction": iteration_details[-1]["sample_fraction"],
+                "accuracy_target": config.get("accuracy_target"),
             }
         )
     return {
@@ -142,6 +183,7 @@ def run_runtime_sampling(
         "approx": True,
         "source": source,
         "mode_profile": mode_key,
+        "accuracy_target": config.get("accuracy_target"),
         "sample_rate": iteration_details[-1]["sample_fraction"],
         "iterations": iteration_details,
         "convergence_error": None if final_error is None or math.isinf(final_error) else final_error,

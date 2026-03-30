@@ -8,6 +8,7 @@ interface ExecutionProgress {
   phase?: string;
   message?: string;
   current_sample_fraction?: number;
+  accuracy_target?: number;
   iterations?: Array<{
     sample_fraction: number;
     rows_sampled: number;
@@ -37,6 +38,8 @@ function App() {
   const [loadingApprox, setLoadingApprox] = useState(false);
   const [progressExact, setProgressExact] = useState<ExecutionProgress | null>(null);
   const [progressApprox, setProgressApprox] = useState<ExecutionProgress | null>(null);
+  const [accuracyEnabledApprox, setAccuracyEnabledApprox] = useState(false);
+  const [accuracyTargetApprox, setAccuracyTargetApprox] = useState(92);
 
   const backend = "http://127.0.0.1:8093";
   const csvMode = tableName !== null;
@@ -160,6 +163,10 @@ function App() {
           mode: panel,
           source: csvMode ? "duckdb" : source,
           request_id: requestId,
+          accuracy_target:
+            panel === "approx" && accuracyEnabledApprox
+              ? accuracyTargetApprox
+              : undefined,
         }),
       });
       const data = await res.json();
@@ -178,6 +185,113 @@ function App() {
   // -----------------------
   // Result Table renderer
   // -----------------------
+  const renderAccuracyControl = () => (
+    <div
+      style={{
+        background: accuracyEnabledApprox
+          ? "linear-gradient(135deg, rgba(245,184,74,0.16), rgba(186,117,23,0.08))"
+          : "linear-gradient(135deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02))",
+        border: accuracyEnabledApprox
+          ? "0.5px solid rgba(245,184,74,0.28)"
+          : "0.5px solid rgba(255,255,255,0.08)",
+        borderRadius: "12px",
+        padding: "14px",
+        display: "flex",
+        flexDirection: "column",
+        gap: "10px",
+        opacity: accuracyEnabledApprox ? 1 : 0.62,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          gap: "12px",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          <input
+            type="checkbox"
+            checked={accuracyEnabledApprox}
+            onChange={(e) => setAccuracyEnabledApprox(e.target.checked)}
+            style={{ accentColor: "#f5b84a" }}
+          />
+          <div>
+            <div style={{ fontSize: "12px", color: "#f0d2a3", fontWeight: 700 }}>
+              Accuracy-Speed Tradeoff
+            </div>
+            <div style={{ fontSize: "11px", color: "#b5976b", marginTop: "2px" }}>
+              Optional. Enable only if you want a specific target.
+            </div>
+          </div>
+        </div>
+        <div
+          style={{
+            minWidth: "72px",
+            textAlign: "center",
+            padding: "8px 10px",
+            borderRadius: "999px",
+            background: "rgba(15,15,15,0.55)",
+            color: "#fff3da",
+            fontSize: "18px",
+            fontWeight: 700,
+          }}
+        >
+          {accuracyTargetApprox}%
+        </div>
+      </div>
+      <input
+        type="range"
+        min={70}
+        max={99}
+        step={1}
+        value={accuracyTargetApprox}
+        onChange={(e) => setAccuracyTargetApprox(Number(e.target.value))}
+        disabled={!accuracyEnabledApprox}
+        style={{ width: "100%", accentColor: "#f5b84a" }}
+      />
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(3, 1fr)",
+          gap: "8px",
+        }}
+      >
+        {[
+          { label: "Fast", value: 80, note: "lower latency" },
+          { label: "Balanced", value: 92, note: "daily use" },
+          { label: "Accurate", value: 98, note: "deeper scan" },
+        ].map((preset) => (
+          <button
+            key={preset.label}
+            type="button"
+            onClick={() => setAccuracyTargetApprox(preset.value)}
+            disabled={!accuracyEnabledApprox}
+            style={{
+              padding: "10px 12px",
+              borderRadius: "10px",
+              border:
+                accuracyTargetApprox === preset.value
+                  ? "0.5px solid rgba(245,184,74,0.5)"
+                  : "0.5px solid rgba(255,255,255,0.08)",
+              background:
+                accuracyTargetApprox === preset.value
+                  ? "rgba(245,184,74,0.18)"
+                  : "rgba(255,255,255,0.03)",
+              color: accuracyTargetApprox === preset.value ? "#fff0cf" : "#bcb2a1",
+            }}
+          >
+            <div style={{ fontSize: "12px", fontWeight: 700 }}>{preset.label}</div>
+            <div style={{ fontSize: "10px", marginTop: "2px" }}>
+              {preset.value}% • {preset.note}
+            </div>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+
   const renderResult = (
     result: any,
     error: string | null,
@@ -252,6 +366,9 @@ function App() {
                   Sample: {(progress.current_sample_fraction * 100).toFixed(0)}%
                 </div>
               )}
+              {typeof progress.accuracy_target === "number" && (
+                <div>Target accuracy: {progress.accuracy_target.toFixed(0)}%</div>
+              )}
               {progress.iterations && progress.iterations.length > 0 && (
                 <div>
                   Latest iteration: sampled{" "}
@@ -281,7 +398,7 @@ function App() {
               }}
             >
               <span style={{ fontSize: "14px" }}>⚡</span>
-              <span>Result loaded from cache (instant!)</span>
+              <span>Result loaded from cache</span>
             </div>
           )}
           <div
@@ -300,18 +417,43 @@ function App() {
                 {result.approx ? "approx" : "exact"}
               </span>
             </span>
+            {result.accuracy_target && (
+              <span>
+                Accuracy target:{" "}
+                <span style={{ color: "#f0d2a3" }}>{result.accuracy_target}%</span>
+              </span>
+            )}
             <span>
               Source:{" "}
               <span style={{ color: "#ccc" }}>{result.source ?? source}</span>
             </span>
             <span>
-              Time:{" "}
+              {result.cached ? "Cache load time: " : "Time: "}
               <span style={{ color: result.cached ? "#5aaaf5" : "#ccc" }}>
+                {typeof result.cache_load_time === "number"
+                  ? `${result.cache_load_time.toFixed(6)}s`
+                  : typeof result.time === "number"
+                    ? `${result.time.toFixed(6)}s`
+                    : "n/a"}
+              </span>
+            </span>
+            {result.cached && (
+              <span>
+                Old time:{" "}
+                <span style={{ color: "#ccc" }}>
+                  {typeof result.old_time === "number"
+                    ? `${result.old_time.toFixed(6)}s`
+                    : "n/a"}
+                </span>
+              </span>
+            )}
+            {!result.cached && (
+              <span style={{ display: "none" }}>
                 {typeof result.time === "number"
                   ? `${result.time.toFixed(6)}s`
                   : "n/a"}
               </span>
-            </span>
+            )}
             {result.sample_rate && (
               <span>
                 Sample rate:{" "}
@@ -447,27 +589,59 @@ function App() {
       />
       <div
         style={{
-          padding: "28px 32px",
+          padding: "28px 32px 40px",
           color: "white",
-          background: "#0f0f0f",
+          background:
+            "radial-gradient(circle at top left, rgba(90,170,245,0.12), transparent 28%), radial-gradient(circle at top right, rgba(245,184,74,0.10), transparent 24%), #0f0f0f",
           minHeight: "100vh",
           fontFamily: "'Syne', sans-serif",
         }}
       >
-        {/* Header */}
-        <h1
+        <div
           style={{
-            fontSize: "1.8rem",
-            fontWeight: 700,
-            letterSpacing: "-0.5px",
-            marginBottom: "4px",
+            marginBottom: "24px",
+            padding: "20px 22px",
+            borderRadius: "18px",
+            background:
+              "linear-gradient(135deg, rgba(255,255,255,0.05), rgba(255,255,255,0.015))",
+            border: "0.5px solid rgba(255,255,255,0.08)",
+            boxShadow: "0 24px 60px rgba(0,0,0,0.25)",
           }}
         >
-          AetherQuery — Executor Workspace
-        </h1>
-        <p style={{ color: "#666", fontSize: "13px", marginBottom: "24px" }}>
-          Run exact and approximate queries side by side
-        </p>
+          <div
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "8px",
+              padding: "6px 10px",
+              borderRadius: "999px",
+              background: "rgba(90,170,245,0.12)",
+              border: "0.5px solid rgba(90,170,245,0.24)",
+              color: "#9dccfb",
+              fontSize: "11px",
+              fontWeight: 700,
+              letterSpacing: "0.3px",
+              textTransform: "uppercase",
+              marginBottom: "14px",
+            }}
+          >
+            Runtime Sampling Workspace
+          </div>
+          <h1
+            style={{
+              fontSize: "2.2rem",
+              fontWeight: 700,
+              letterSpacing: "-0.8px",
+              marginBottom: "6px",
+            }}
+          >
+            AetherQuery Executor
+          </h1>
+          <p style={{ color: "#7f8791", fontSize: "14px", maxWidth: "760px" }}>
+            Run exact and approximate analytics side by side, tune the target
+            accuracy, and watch the sampler refine results while it executes.
+          </p>
+        </div>
 
         {/* Upload bar */}
         <div
@@ -602,6 +776,7 @@ function App() {
               border: "0.5px solid rgba(255,255,255,0.08)",
               borderRadius: "12px",
               overflow: "hidden",
+              boxShadow: "0 20px 45px rgba(0,0,0,0.18)",
             }}
           >
             <div
@@ -818,6 +993,7 @@ function App() {
               border: "0.5px solid rgba(255,255,255,0.08)",
               borderRadius: "12px",
               overflow: "hidden",
+              boxShadow: "0 20px 45px rgba(0,0,0,0.18)",
             }}
           >
             <div
@@ -913,6 +1089,7 @@ function App() {
                   outline: "none",
                 }}
               />
+              {renderAccuracyControl()}
               <div
                 style={{
                   display: "grid",

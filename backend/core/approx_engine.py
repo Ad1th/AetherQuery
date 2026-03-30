@@ -19,8 +19,15 @@ def run_approx(
     query: str,
     source: str = "duckdb",
     mode: str = "balanced",
+    accuracy_target: float | None = None,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     source_key = source.lower().strip()
     parsed = parse_analytical_query(query)
-    return run_runtime_sampling(parsed, source_key, mode, progress_callback=progress_callback)
+    return run_runtime_sampling(
+        parsed,
+        source_key,
+        mode,
+        accuracy_target=accuracy_target,
+        progress_callback=progress_callback,
+    )

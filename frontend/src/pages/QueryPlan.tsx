@@ -24,6 +24,9 @@ interface ExecuteResponse {
   rewritten_query?: string | null;
   cached?: boolean;
   request_id?: string;
+  accuracy_target?: number | null;
+  old_time?: number;
+  cache_load_time?: number;
 }
 
 interface ExecutionProgress {
@@ -31,6 +34,7 @@ interface ExecutionProgress {
   phase?: string;
   message?: string;
   current_sample_fraction?: number;
+  accuracy_target?: number;
   iterations?: Array<{
     sample_fraction: number;
     rows_sampled: number;
@@ -67,6 +71,8 @@ export default function QueryPlanPage() {
   const [comparison, setComparison] = useState<ComparisonState | null>(null);
   const [executionProgress, setExecutionProgress] =
     useState<ExecutionProgress | null>(null);
+  const [accuracyEnabled, setAccuracyEnabled] = useState(false);
+  const [accuracyTarget, setAccuracyTarget] = useState(92);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [lastAction, setLastAction] = useState<
     "analyze" | "execute" | "optimize" | null
@@ -231,6 +237,8 @@ export default function QueryPlanPage() {
           mode,
           source,
           request_id: requestId,
+          accuracy_target:
+            mode === "approx" && accuracyEnabled ? accuracyTarget : undefined,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -332,10 +340,19 @@ export default function QueryPlanPage() {
       setComparison({
         exactValue: extractScalarValue(exactResult),
         approxValue: approxResult ? extractScalarValue(approxResult) : null,
-        exactTime: typeof exactResult.time === "number" ? exactResult.time : null,
+        exactTime:
+          typeof exactResult.old_time === "number"
+            ? exactResult.old_time
+            : typeof exactResult.time === "number"
+              ? exactResult.time
+              : null,
         approxTime:
-          approxResult && typeof approxResult.time === "number"
-            ? approxResult.time
+          approxResult
+            ? typeof approxResult.old_time === "number"
+              ? approxResult.old_time
+              : typeof approxResult.time === "number"
+                ? approxResult.time
+                : null
             : null,
         approxError,
       });
@@ -357,13 +374,83 @@ export default function QueryPlanPage() {
     analyzeQuery(item.query);
   };
 
+  const renderAccuracyControl = () => (
+    <div
+      style={{
+        padding: "14px",
+        background: accuracyEnabled
+          ? "linear-gradient(135deg, rgba(245,184,74,0.14), rgba(255,255,255,0.02))"
+          : "linear-gradient(135deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02))",
+        border: accuracyEnabled
+          ? "0.5px solid rgba(245,184,74,0.24)"
+          : "0.5px solid rgba(255,255,255,0.08)",
+        borderRadius: "12px",
+        display: "flex",
+        flexDirection: "column",
+        gap: "10px",
+        opacity: accuracyEnabled ? 1 : 0.62,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          gap: "12px",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          <input
+            type="checkbox"
+            checked={accuracyEnabled}
+            onChange={(e) => setAccuracyEnabled(e.target.checked)}
+            style={{ accentColor: "#f5b84a" }}
+          />
+          <div>
+            <div style={{ fontSize: "12px", fontWeight: 700, color: "#f0d2a3" }}>
+              Accuracy Target
+            </div>
+            <div style={{ fontSize: "11px", color: "#b5976b", marginTop: "2px" }}>
+              Optional. Enable it only when you want a fixed target.
+            </div>
+          </div>
+        </div>
+        <div
+          style={{
+            padding: "8px 10px",
+            borderRadius: "999px",
+            background: "rgba(15,15,15,0.45)",
+            color: "#fff4dc",
+            fontSize: "18px",
+            fontWeight: 700,
+            minWidth: "72px",
+            textAlign: "center",
+          }}
+        >
+          {accuracyTarget}%
+        </div>
+      </div>
+      <input
+        type="range"
+        min={70}
+        max={99}
+        step={1}
+        value={accuracyTarget}
+        onChange={(e) => setAccuracyTarget(Number(e.target.value))}
+        disabled={!accuracyEnabled}
+        style={{ width: "100%", accentColor: "#f5b84a" }}
+      />
+    </div>
+  );
+
   return (
     <div
       style={{
         display: "flex",
         gap: "14px",
         padding: "24px",
-        background: "#0f0f0f",
+        background:
+          "radial-gradient(circle at top left, rgba(90,170,245,0.12), transparent 28%), radial-gradient(circle at top right, rgba(245,184,74,0.10), transparent 24%), #0f0f0f",
         minHeight: "100vh",
         color: "#e0ddd8",
         fontFamily: "'Syne', sans-serif",
@@ -526,19 +613,50 @@ export default function QueryPlanPage() {
               Show Sidebar
             </button>
           )}
-          <h1
+          <div
             style={{
-              fontSize: "1.8rem",
-              fontWeight: 700,
-              letterSpacing: "-0.5px",
-              margin: "0 0 4px 0",
+              padding: "20px 22px",
+              borderRadius: "18px",
+              background:
+                "linear-gradient(135deg, rgba(255,255,255,0.05), rgba(255,255,255,0.015))",
+              border: "0.5px solid rgba(255,255,255,0.08)",
+              boxShadow: "0 24px 60px rgba(0,0,0,0.25)",
             }}
           >
-            AetherQuery — Plan Analyzer
-          </h1>
-          <p style={{ color: "#666", fontSize: "13px", margin: 0 }}>
-            Visualize how your queries are executed
-          </p>
+            <div
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "8px",
+                padding: "6px 10px",
+                borderRadius: "999px",
+                background: "rgba(90,170,245,0.12)",
+                border: "0.5px solid rgba(90,170,245,0.24)",
+                color: "#9dccfb",
+                fontSize: "11px",
+                fontWeight: 700,
+                letterSpacing: "0.3px",
+                textTransform: "uppercase",
+                marginBottom: "14px",
+              }}
+            >
+              Exact vs Approx Explorer
+            </div>
+            <h1
+              style={{
+                fontSize: "2.2rem",
+                fontWeight: 700,
+                letterSpacing: "-0.8px",
+                margin: "0 0 6px 0",
+              }}
+            >
+              AetherQuery Plan Analyzer
+            </h1>
+            <p style={{ color: "#7f8791", fontSize: "14px", margin: 0 }}>
+              Inspect plan shape, compare exact and approximate execution, and
+              tune the target accuracy from the same workspace.
+            </p>
+          </div>
         </div>
 
         {/* Source Selector */}
@@ -602,6 +720,8 @@ export default function QueryPlanPage() {
             }}
           />
         </div>
+
+        {renderAccuracyControl()}
 
         {/* Buttons */}
         <div style={{ display: "flex", gap: "8px" }}>
@@ -731,6 +851,11 @@ export default function QueryPlanPage() {
                 {typeof executionProgress.current_sample_fraction === "number" && (
                   <div>
                     Sample: {(executionProgress.current_sample_fraction * 100).toFixed(0)}%
+                  </div>
+                )}
+                {typeof executionProgress.accuracy_target === "number" && (
+                  <div>
+                    Target accuracy: {executionProgress.accuracy_target.toFixed(0)}%
                   </div>
                 )}
                 {executionProgress.iterations &&

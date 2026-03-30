@@ -10,24 +10,30 @@ export default function Navbar() {
         alignItems: "center",
         gap: "24px",
         padding: "12px 28px",
-        background: "#0f0f0f",
+        background: "rgba(15,15,15,0.78)",
         borderBottom: "0.5px solid rgba(255,255,255,0.08)",
+        backdropFilter: "blur(14px)",
         position: "sticky",
         top: 0,
         zIndex: 100,
       }}
     >
-      <h2
-        style={{
-          margin: 0,
-          fontSize: "16px",
-          fontWeight: 700,
-          letterSpacing: "-0.3px",
-          color: "#e0ddd8",
-        }}
-      >
-        AetherQuery
-      </h2>
+      <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+        <h2
+          style={{
+            margin: 0,
+            fontSize: "16px",
+            fontWeight: 700,
+            letterSpacing: "-0.3px",
+            color: "#e0ddd8",
+          }}
+        >
+          AetherQuery
+        </h2>
+        <span style={{ fontSize: "10px", color: "#7c8794", letterSpacing: "0.4px" }}>
+          Approximate Analytics Engine
+        </span>
+      </div>
 
       <div style={{ display: "flex", gap: "16px" }}>
         <Link
@@ -82,8 +88,8 @@ export default function Navbar() {
       </div>
 
       <div style={{ marginLeft: "auto" }}>
-        <span style={{ fontSize: "11px", color: "#666" }}>
-          ✓ Connected to backend
+        <span style={{ fontSize: "11px", color: "#7caee0" }}>
+          Runtime sampling enabled
         </span>
       </div>
     </nav>

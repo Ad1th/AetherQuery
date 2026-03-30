@@ -28,6 +28,7 @@ async def execute(req: ExecuteRequest) -> dict[str, Any]:
     request_id = req.request_id or uuid.uuid4().hex
     corrected_query = auto_correct_query(req.query)
     function_suggestions = suggest_functions(corrected_query)
+    cache_lookup_start = time.time()
     cache_key = hashlib.sha256(
         f"{req.source}|{req.mode}|{corrected_query}".encode("utf-8")
     ).hexdigest()
@@ -36,11 +37,15 @@ async def execute(req: ExecuteRequest) -> dict[str, Any]:
 
     # ✅ Handle cached response
     if cached is not None:
+        cache_load_time = time.time() - cache_lookup_start
         cached_response = {
             **cached,
             "original_query": req.query,
             "corrected_query": corrected_query,
             "function_suggestions": function_suggestions,
+            "old_time": cached.get("time"),
+            "cache_load_time": cache_load_time,
+            "time": cache_load_time,
             "cached": True,
         }
         execution_progress.start(
@@ -85,6 +90,7 @@ async def execute(req: ExecuteRequest) -> dict[str, Any]:
             corrected_query,
             req.mode,
             req.source,
+            req.accuracy_target,
             publish_progress,
         )
     except Exception as exc:
@@ -128,6 +134,7 @@ async def execute(req: ExecuteRequest) -> dict[str, Any]:
         "function_suggestions": function_suggestions,
         "iterations": payload.get("iterations", []),
         "mode_profile": payload.get("mode_profile"),
+        "accuracy_target": payload.get("accuracy_target", req.accuracy_target),
         "convergence_error": payload.get("convergence_error"),
         "convergence_threshold": payload.get("convergence_threshold"),
         "stop_reason": payload.get("stop_reason"),
