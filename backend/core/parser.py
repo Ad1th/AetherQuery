@@ -6,16 +6,25 @@ from dataclasses import dataclass
 
 SUPPORTED_AGGREGATES = {"count", "sum", "avg"}
 SQL_KEYWORDS = {
+    "and",
     "as",
     "asc",
     "avg",
+    "between",
     "by",
     "coalesce",
     "count",
+    "date",
     "desc",
     "from",
     "group",
+    "in",
+    "is",
     "limit",
+    "like",
+    "not",
+    "null",
+    "or",
     "order",
     "select",
     "sum",
@@ -130,7 +139,8 @@ def _parse_aggregate(item: str) -> AggregateSpec:
 
 
 def _extract_identifiers(expression: str) -> list[str]:
-    candidates = re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", expression)
+    cleaned = re.sub(r"'(?:''|[^'])*'", " ", expression)
+    candidates = re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", cleaned)
     identifiers: list[str] = []
     for token in candidates:
         if token.lower() in SQL_KEYWORDS:
