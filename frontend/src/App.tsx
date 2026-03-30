@@ -1,5 +1,7 @@
 import { useState } from "react";
 import PlanGraph from "./components/PlanGraph";
+import QueryCacheSidebar from "./components/QueryCacheSidebar";
+import Spinner from "./components/Spinner";
 
 function App() {
   const [tableName, setTableName] = useState<string | null>(null);
@@ -18,6 +20,8 @@ function App() {
     "duckdb" | "postgres" | "mysql"
   >("duckdb");
   const [suggestedQueries, setSuggestedQueries] = useState<string[]>([]);
+  const [loadingExact, setLoadingExact] = useState(false);
+  const [loadingApprox, setLoadingApprox] = useState(false);
 
   const backend = "http://127.0.0.1:8093";
   const csvMode = tableName !== null;
@@ -58,19 +62,25 @@ function App() {
     const source = panel === "exact" ? sourceExact : sourceApprox;
     const setError = panel === "exact" ? setErrorExact : setErrorApprox;
     const setPlan = panel === "exact" ? setPlanExact : setPlanApprox;
+    const setLoading = panel === "exact" ? setLoadingExact : setLoadingApprox;
     if (!query.trim()) return;
     setError(null);
-    const res = await fetch(`${backend}/api/sql/parse-plan`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query, source: csvMode ? "duckdb" : source }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      setError(data?.detail || "Failed to analyze query");
-      return;
+    setLoading(true);
+    try {
+      const res = await fetch(`${backend}/api/sql/parse-plan`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query, source: csvMode ? "duckdb" : source }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data?.detail || "Failed to analyze query");
+        return;
+      }
+      setPlan(data.plan_tree ?? null);
+    } finally {
+      setLoading(false);
     }
-    setPlan(data.plan_tree ?? null);
   };
 
   // -----------------------
@@ -81,47 +91,106 @@ function App() {
     const source = panel === "exact" ? sourceExact : sourceApprox;
     const setError = panel === "exact" ? setErrorExact : setErrorApprox;
     const setResult = panel === "exact" ? setResultExact : setResultApprox;
+    const setLoading = panel === "exact" ? setLoadingExact : setLoadingApprox;
     if (!query.trim()) return;
     setError(null);
-    const res = await fetch(`${backend}/api/sql/execute`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        query,
-        mode: panel,
-        source: csvMode ? "duckdb" : source,
-      }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      setResult(null);
-      setError(data?.detail || "Query execution failed");
-      return;
+    setLoading(true);
+    try {
+      const res = await fetch(`${backend}/api/sql/execute`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          query,
+          mode: panel,
+          source: csvMode ? "duckdb" : source,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setResult(null);
+        setError(data?.detail || "Query execution failed");
+        return;
+      }
+      setResult(data);
+    } finally {
+      setLoading(false);
     }
-    setResult(data);
   };
 
   // -----------------------
   // Result Table renderer
   // -----------------------
-  const renderResult = (result: any, error: string | null, source: string) => (
+  const renderResult = (
+    result: any,
+    error: string | null,
+    source: string,
+    loading: boolean = false
+  ) => (
     <div style={{ marginTop: "12px" }}>
       {error && (
         <div
           style={{
-            color: "#f07070",
-            fontSize: "13px",
-            padding: "8px 10px",
-            background: "rgba(240,112,112,0.08)",
-            borderRadius: "6px",
-            border: "0.5px solid rgba(240,112,112,0.25)",
+            color: "#ff6b6b",
+            fontSize: "12px",
+            padding: "10px 12px",
+            background: "rgba(255,107,107,0.1)",
+            borderRadius: "8px",
+            border: "0.5px solid rgba(255,107,107,0.3)",
+            display: "flex",
+            alignItems: "flex-start",
+            gap: "8px",
           }}
         >
-          <strong>Error:</strong> {error}
+          <span style={{ fontSize: "14px", marginTop: "1px", flexShrink: 0 }}>
+            ⚠️
+          </span>
+          <div>
+            <strong style={{ display: "block", marginBottom: "3px" }}>
+              Error
+            </strong>
+            <span>{error}</span>
+          </div>
         </div>
       )}
-      {result && (
+      {loading && (
+        <div
+          style={{
+            padding: "16px 12px",
+            textAlign: "center",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: "10px",
+            color: "#888",
+            fontSize: "13px",
+          }}
+        >
+          <Spinner size={14} />
+          <span>Executing query…</span>
+        </div>
+      )}
+      {result && !loading && (
         <div style={{ marginTop: "8px" }}>
+          {result.cached && (
+            <div
+              style={{
+                background: "rgba(90, 170, 245, 0.12)",
+                border: "0.5px solid rgba(90, 170, 245, 0.3)",
+                padding: "8px 12px",
+                borderRadius: "6px",
+                marginBottom: "8px",
+                fontSize: "12px",
+                color: "#5aaaf5",
+                fontWeight: 600,
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+              }}
+            >
+              <span style={{ fontSize: "14px" }}>⚡</span>
+              <span>Result loaded from cache (instant!)</span>
+            </div>
+          )}
           <div
             style={{
               fontSize: "12px",
@@ -129,6 +198,7 @@ function App() {
               marginBottom: "8px",
               display: "flex",
               gap: "14px",
+              flexWrap: "wrap",
             }}
           >
             <span>
@@ -143,7 +213,7 @@ function App() {
             </span>
             <span>
               Time:{" "}
-              <span style={{ color: "#ccc" }}>
+              <span style={{ color: result.cached ? "#5aaaf5" : "#ccc" }}>
                 {typeof result.time === "number"
                   ? `${result.time.toFixed(6)}s`
                   : "n/a"}
@@ -251,7 +321,7 @@ function App() {
           )}
         </div>
       )}
-      {!result && !error && (
+      {!result && !error && !loading && (
         <div
           style={{
             color: "#444",
@@ -266,518 +336,609 @@ function App() {
     </div>
   );
 
-  return (
-    <div
-      style={{
-        padding: "28px 32px",
-        color: "white",
-        background: "#0f0f0f",
-        minHeight: "100vh",
-        fontFamily: "'Syne', sans-serif",
-      }}
-    >
-      {/* Header */}
-      <h1
-        style={{
-          fontSize: "1.8rem",
-          fontWeight: 700,
-          letterSpacing: "-0.5px",
-          marginBottom: "4px",
-        }}
-      >
-        Query Executor Workspace
-      </h1>
-      <p style={{ color: "#666", fontSize: "13px", marginBottom: "24px" }}>
-        Run exact and approximate queries side by side
-      </p>
+  // Handle query click from cache sidebar
+  const handleCacheQueryClick = (query: string, source: string) => {
+    setQueryExact(query);
+    setSourceExact(source as "duckdb" | "postgres" | "mysql");
+    // Auto-execute in 100ms
+    setTimeout(() => {
+      handleExecute("exact");
+    }, 100);
+  };
 
-      {/* Upload bar */}
+  return (
+    <>
+      <QueryCacheSidebar
+        onQueryClick={handleCacheQueryClick}
+        currentQuery={queryExact}
+      />
       <div
         style={{
-          display: "flex",
-          alignItems: "center",
-          gap: "14px",
-          padding: "10px 16px",
-          background: "#1a1a1a",
-          border: "0.5px solid rgba(255,255,255,0.1)",
-          borderRadius: "8px",
-          marginBottom: "20px",
+          padding: "28px 32px",
+          color: "white",
+          background: "#0f0f0f",
+          minHeight: "100vh",
+          fontFamily: "'Syne', sans-serif",
         }}
       >
-        <label
+        {/* Header */}
+        <h1
           style={{
-            fontSize: "13px",
-            fontWeight: 600,
-            color: "#888",
-            whiteSpace: "nowrap",
+            fontSize: "1.8rem",
+            fontWeight: 700,
+            letterSpacing: "-0.5px",
+            marginBottom: "4px",
           }}
         >
-          Upload CSV
-        </label>
-        <input
-          type="file"
-          onChange={handleUpload}
-          style={{
-            fontSize: "13px",
-            color: "#ccc",
-            flex: 1,
-            background: "transparent",
-            border: "none",
-            outline: "none",
-            cursor: "pointer",
-          }}
-        />
-        {tableName && (
-          <span
-            style={{ fontSize: "12px", color: "#5aaaf5", whiteSpace: "nowrap" }}
-          >
-            ✓ {tableName}
-          </span>
-        )}
-      </div>
-
-      {csvMode && (
-        <p
-          style={{
-            color: "#5aaaf5",
-            fontSize: "12px",
-            marginBottom: "16px",
-            padding: "6px 12px",
-            background: "rgba(24,95,165,0.1)",
-            borderRadius: "6px",
-            border: "0.5px solid rgba(90,170,245,0.2)",
-          }}
-        >
-          CSV mode active — queries are locked to DuckDB
+          AetherQuery — Executor Workspace
+        </h1>
+        <p style={{ color: "#666", fontSize: "13px", marginBottom: "24px" }}>
+          Run exact and approximate queries side by side
         </p>
-      )}
 
-      {/* Suggested queries */}
-      {tableName && suggestedQueries.length > 0 && (
-        <div style={{ marginBottom: "20px" }}>
-          <div
+        {/* Upload bar */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "14px",
+            padding: "10px 16px",
+            background: "#1a1a1a",
+            border: "0.5px solid rgba(255,255,255,0.1)",
+            borderRadius: "8px",
+            marginBottom: "20px",
+          }}
+        >
+          <label
             style={{
-              fontSize: "12px",
-              color: "#666",
-              marginBottom: "8px",
+              fontSize: "13px",
               fontWeight: 600,
-              textTransform: "uppercase",
-              letterSpacing: "0.5px",
+              color: "#888",
+              whiteSpace: "nowrap",
             }}
           >
-            Suggested Queries
-          </div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
-            {suggestedQueries.map((q, i) => (
-              <div
-                key={i}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "8px",
-                  background: "#1a1a1a",
-                  border: "0.5px solid #2a2a2a",
-                  borderRadius: "6px",
-                  padding: "6px 10px",
-                }}
-              >
-                <code style={{ fontSize: "12px", color: "#bbb" }}>{q}</code>
-                <button
-                  onClick={() => {
-                    setQueryExact(q);
-                    setQueryApprox(q);
-                  }}
+            Upload CSV
+          </label>
+          <input
+            type="file"
+            onChange={handleUpload}
+            style={{
+              fontSize: "13px",
+              color: "#ccc",
+              flex: 1,
+              background: "transparent",
+              border: "none",
+              outline: "none",
+              cursor: "pointer",
+            }}
+          />
+          {tableName && (
+            <span
+              style={{
+                fontSize: "12px",
+                color: "#5aaaf5",
+                whiteSpace: "nowrap",
+              }}
+            >
+              ✓ {tableName}
+            </span>
+          )}
+        </div>
+
+        {csvMode && (
+          <p
+            style={{
+              color: "#5aaaf5",
+              fontSize: "12px",
+              marginBottom: "16px",
+              padding: "6px 12px",
+              background: "rgba(24,95,165,0.1)",
+              borderRadius: "6px",
+              border: "0.5px solid rgba(90,170,245,0.2)",
+            }}
+          >
+            CSV mode active — queries are locked to DuckDB
+          </p>
+        )}
+
+        {/* Suggested queries */}
+        {tableName && suggestedQueries.length > 0 && (
+          <div style={{ marginBottom: "20px" }}>
+            <div
+              style={{
+                fontSize: "12px",
+                color: "#666",
+                marginBottom: "8px",
+                fontWeight: 600,
+                textTransform: "uppercase",
+                letterSpacing: "0.5px",
+              }}
+            >
+              Suggested Queries
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+              {suggestedQueries.map((q, i) => (
+                <div
+                  key={i}
                   style={{
-                    fontSize: "11px",
-                    padding: "3px 8px",
-                    background: "#2a2a2a",
-                    color: "#aaa",
-                    border: "0.5px solid #3a3a3a",
-                    borderRadius: "4px",
-                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px",
+                    background: "#1a1a1a",
+                    border: "0.5px solid #2a2a2a",
+                    borderRadius: "6px",
+                    padding: "6px 10px",
                   }}
                 >
-                  Use
+                  <code style={{ fontSize: "12px", color: "#bbb" }}>{q}</code>
+                  <button
+                    onClick={() => {
+                      setQueryExact(q);
+                      setQueryApprox(q);
+                    }}
+                    style={{
+                      fontSize: "11px",
+                      padding: "3px 8px",
+                      background: "#2a2a2a",
+                      color: "#aaa",
+                      border: "0.5px solid #3a3a3a",
+                      borderRadius: "4px",
+                      cursor: "pointer",
+                    }}
+                  >
+                    Use
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Two columns */}
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "1fr 1fr",
+            gap: "14px",
+          }}
+        >
+          {/* EXACT PANEL */}
+          <div
+            style={{
+              background: "#141414",
+              border: "0.5px solid rgba(255,255,255,0.08)",
+              borderRadius: "12px",
+              overflow: "hidden",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "10px",
+                padding: "12px 16px",
+                borderBottom: "0.5px solid rgba(255,255,255,0.06)",
+              }}
+            >
+              <span
+                style={{
+                  fontSize: "10px",
+                  fontWeight: 700,
+                  letterSpacing: "0.8px",
+                  textTransform: "uppercase",
+                  padding: "3px 9px",
+                  borderRadius: "4px",
+                  background: "rgba(24,95,165,0.18)",
+                  color: "#5aaaf5",
+                }}
+              >
+                Exact
+              </span>
+              <span style={{ fontSize: "14px", fontWeight: 600 }}>
+                Exact Mode
+              </span>
+              <span
+                style={{ fontSize: "12px", color: "#444", marginLeft: "auto" }}
+              >
+                Precise results
+              </span>
+            </div>
+            <div
+              style={{
+                padding: "16px",
+                display: "flex",
+                flexDirection: "column",
+                gap: "12px",
+              }}
+            >
+              <div
+                style={{ display: "flex", alignItems: "center", gap: "10px" }}
+              >
+                <span
+                  style={{ fontSize: "12px", color: "#666", minWidth: "52px" }}
+                >
+                  Source
+                </span>
+                <select
+                  value={sourceExact}
+                  onChange={(e) => setSourceExact(e.target.value as any)}
+                  disabled={csvMode}
+                  style={{
+                    fontFamily: "inherit",
+                    fontSize: "13px",
+                    padding: "5px 10px",
+                    borderRadius: "6px",
+                    border: "0.5px solid rgba(255,255,255,0.12)",
+                    background: "#1e1e1e",
+                    color: "#ccc",
+                    cursor: csvMode ? "not-allowed" : "pointer",
+                    opacity: csvMode ? 0.5 : 1,
+                  }}
+                >
+                  <option value="duckdb">duckdb</option>
+                  <option value="postgres">postgres</option>
+                  <option value="mysql">mysql</option>
+                </select>
+                {csvMode && (
+                  <span style={{ fontSize: "11px", color: "#555" }}>
+                    locked to duckdb
+                  </span>
+                )}
+              </div>
+              <textarea
+                value={queryExact}
+                onChange={(e) => setQueryExact(e.target.value)}
+                placeholder="SELECT * FROM data LIMIT 10;"
+                style={{
+                  width: "100%",
+                  minHeight: "130px",
+                  padding: "10px 12px",
+                  background: "#1a1a1a",
+                  border: "0.5px solid rgba(255,255,255,0.08)",
+                  borderRadius: "8px",
+                  color: "#e0ddd8",
+                  fontFamily: "'JetBrains Mono', monospace",
+                  fontSize: "12.5px",
+                  lineHeight: 1.65,
+                  resize: "vertical",
+                  outline: "none",
+                }}
+              />
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  gap: "8px",
+                }}
+              >
+                <button
+                  onClick={() => handleAnalyze("exact")}
+                  disabled={loadingExact}
+                  style={{
+                    padding: "9px 12px",
+                    fontFamily: "inherit",
+                    fontWeight: 600,
+                    fontSize: "13px",
+                    borderRadius: "8px",
+                    border: "0.5px solid rgba(24,95,165,0.3)",
+                    background: loadingExact
+                      ? "rgba(24,95,165,0.1)"
+                      : "rgba(24,95,165,0.15)",
+                    color: "#5aaaf5",
+                    cursor: loadingExact ? "not-allowed" : "pointer",
+                    opacity: loadingExact ? 0.6 : 1,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: "6px",
+                  }}
+                >
+                  {loadingExact ? (
+                    <>
+                      <Spinner size={12} />
+                      Analyzing…
+                    </>
+                  ) : (
+                    "Analyze Query"
+                  )}
+                </button>
+                <button
+                  onClick={() => handleExecute("exact")}
+                  disabled={loadingExact}
+                  style={{
+                    padding: "9px 12px",
+                    fontFamily: "inherit",
+                    fontWeight: 600,
+                    fontSize: "13px",
+                    borderRadius: "8px",
+                    border: "none",
+                    background: loadingExact ? "#0d4a8f" : "#185FA5",
+                    color: "#fff",
+                    cursor: loadingExact ? "not-allowed" : "pointer",
+                    opacity: loadingExact ? 0.6 : 1,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: "6px",
+                  }}
+                >
+                  {loadingExact ? (
+                    <>
+                      <Spinner size={12} />
+                      Running…
+                    </>
+                  ) : (
+                    "Run Query"
+                  )}
                 </button>
               </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Two columns */}
-      <div
-        style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px" }}
-      >
-        {/* EXACT PANEL */}
-        <div
-          style={{
-            background: "#141414",
-            border: "0.5px solid rgba(255,255,255,0.08)",
-            borderRadius: "12px",
-            overflow: "hidden",
-          }}
-        >
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "10px",
-              padding: "12px 16px",
-              borderBottom: "0.5px solid rgba(255,255,255,0.06)",
-            }}
-          >
-            <span
-              style={{
-                fontSize: "10px",
-                fontWeight: 700,
-                letterSpacing: "0.8px",
-                textTransform: "uppercase",
-                padding: "3px 9px",
-                borderRadius: "4px",
-                background: "rgba(24,95,165,0.18)",
-                color: "#5aaaf5",
-              }}
-            >
-              Exact
-            </span>
-            <span style={{ fontSize: "14px", fontWeight: 600 }}>
-              Exact Mode
-            </span>
-            <span
-              style={{ fontSize: "12px", color: "#444", marginLeft: "auto" }}
-            >
-              Precise results
-            </span>
-          </div>
-          <div
-            style={{
-              padding: "16px",
-              display: "flex",
-              flexDirection: "column",
-              gap: "12px",
-            }}
-          >
-            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-              <span
-                style={{ fontSize: "12px", color: "#666", minWidth: "52px" }}
-              >
-                Source
-              </span>
-              <select
-                value={sourceExact}
-                onChange={(e) => setSourceExact(e.target.value as any)}
-                disabled={csvMode}
-                style={{
-                  fontFamily: "inherit",
-                  fontSize: "13px",
-                  padding: "5px 10px",
-                  borderRadius: "6px",
-                  border: "0.5px solid rgba(255,255,255,0.12)",
-                  background: "#1e1e1e",
-                  color: "#ccc",
-                  cursor: csvMode ? "not-allowed" : "pointer",
-                  opacity: csvMode ? 0.5 : 1,
-                }}
-              >
-                <option value="duckdb">duckdb</option>
-                <option value="postgres">postgres</option>
-                <option value="mysql">mysql</option>
-              </select>
-              {csvMode && (
-                <span style={{ fontSize: "11px", color: "#555" }}>
-                  locked to duckdb
-                </span>
+              {renderResult(
+                resultExact,
+                errorExact,
+                csvMode ? "duckdb" : sourceExact,
+                loadingExact,
+              )}
+              {planExact && (
+                <div style={{ marginTop: "8px" }}>
+                  <div
+                    style={{
+                      fontSize: "12px",
+                      color: "#666",
+                      marginBottom: "6px",
+                    }}
+                  >
+                    Plan tree
+                  </div>
+                  <pre
+                    style={{
+                      background: "#0d0d0d",
+                      padding: "10px",
+                      borderRadius: "6px",
+                      fontSize: "11px",
+                      overflowX: "auto",
+                      maxHeight: "180px",
+                    }}
+                  >
+                    {JSON.stringify(planExact, null, 2)}
+                  </pre>
+                  <div
+                    style={{
+                      height: "400px",
+                      marginTop: "10px",
+                      border: "0.5px solid #2a2a2a",
+                      borderRadius: "8px",
+                      overflow: "hidden",
+                    }}
+                  >
+                    <PlanGraph plan={planExact} />
+                  </div>
+                </div>
               )}
             </div>
-            <textarea
-              value={queryExact}
-              onChange={(e) => setQueryExact(e.target.value)}
-              placeholder="SELECT * FROM data LIMIT 10;"
-              style={{
-                width: "100%",
-                minHeight: "130px",
-                padding: "10px 12px",
-                background: "#1a1a1a",
-                border: "0.5px solid rgba(255,255,255,0.08)",
-                borderRadius: "8px",
-                color: "#e0ddd8",
-                fontFamily: "'JetBrains Mono', monospace",
-                fontSize: "12.5px",
-                lineHeight: 1.65,
-                resize: "vertical",
-                outline: "none",
-              }}
-            />
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr",
-                gap: "8px",
-              }}
-            >
-              <button
-                onClick={() => handleAnalyze("exact")}
-                style={{
-                  padding: "9px 12px",
-                  fontFamily: "inherit",
-                  fontWeight: 600,
-                  fontSize: "13px",
-                  borderRadius: "8px",
-                  border: "0.5px solid rgba(24,95,165,0.3)",
-                  background: "rgba(24,95,165,0.15)",
-                  color: "#5aaaf5",
-                  cursor: "pointer",
-                }}
-              >
-                Analyze Query
-              </button>
-              <button
-                onClick={() => handleExecute("exact")}
-                style={{
-                  padding: "9px 12px",
-                  fontFamily: "inherit",
-                  fontWeight: 600,
-                  fontSize: "13px",
-                  borderRadius: "8px",
-                  border: "none",
-                  background: "#185FA5",
-                  color: "#fff",
-                  cursor: "pointer",
-                }}
-              >
-                Run Query
-              </button>
-            </div>
-            {renderResult(
-              resultExact,
-              errorExact,
-              csvMode ? "duckdb" : sourceExact,
-            )}
-            {planExact && (
-              <div style={{ marginTop: "8px" }}>
-                <div
-                  style={{
-                    fontSize: "12px",
-                    color: "#666",
-                    marginBottom: "6px",
-                  }}
-                >
-                  Plan tree
-                </div>
-                <pre
-                  style={{
-                    background: "#0d0d0d",
-                    padding: "10px",
-                    borderRadius: "6px",
-                    fontSize: "11px",
-                    overflowX: "auto",
-                    maxHeight: "180px",
-                  }}
-                >
-                  {JSON.stringify(planExact, null, 2)}
-                </pre>
-                <div
-                  style={{
-                    height: "400px",
-                    marginTop: "10px",
-                    border: "0.5px solid #2a2a2a",
-                    borderRadius: "8px",
-                    overflow: "hidden",
-                  }}
-                >
-                  <PlanGraph plan={planExact} />
-                </div>
-              </div>
-            )}
           </div>
-        </div>
 
-        {/* APPROX PANEL */}
-        <div
-          style={{
-            background: "#141414",
-            border: "0.5px solid rgba(255,255,255,0.08)",
-            borderRadius: "12px",
-            overflow: "hidden",
-          }}
-        >
+          {/* APPROX PANEL */}
           <div
             style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "10px",
-              padding: "12px 16px",
-              borderBottom: "0.5px solid rgba(255,255,255,0.06)",
+              background: "#141414",
+              border: "0.5px solid rgba(255,255,255,0.08)",
+              borderRadius: "12px",
+              overflow: "hidden",
             }}
           >
-            <span
-              style={{
-                fontSize: "10px",
-                fontWeight: 700,
-                letterSpacing: "0.8px",
-                textTransform: "uppercase",
-                padding: "3px 9px",
-                borderRadius: "4px",
-                background: "rgba(186,117,23,0.18)",
-                color: "#f5b84a",
-              }}
-            >
-              Approx
-            </span>
-            <span style={{ fontSize: "14px", fontWeight: 600 }}>
-              Approx Mode
-            </span>
-            <span
-              style={{ fontSize: "12px", color: "#444", marginLeft: "auto" }}
-            >
-              Estimated results
-            </span>
-          </div>
-          <div
-            style={{
-              padding: "16px",
-              display: "flex",
-              flexDirection: "column",
-              gap: "12px",
-            }}
-          >
-            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-              <span
-                style={{ fontSize: "12px", color: "#666", minWidth: "52px" }}
-              >
-                Source
-              </span>
-              <select
-                value={sourceApprox}
-                onChange={(e) => setSourceApprox(e.target.value as any)}
-                disabled={csvMode}
-                style={{
-                  fontFamily: "inherit",
-                  fontSize: "13px",
-                  padding: "5px 10px",
-                  borderRadius: "6px",
-                  border: "0.5px solid rgba(255,255,255,0.12)",
-                  background: "#1e1e1e",
-                  color: "#ccc",
-                  cursor: csvMode ? "not-allowed" : "pointer",
-                  opacity: csvMode ? 0.5 : 1,
-                }}
-              >
-                <option value="duckdb">duckdb</option>
-                <option value="postgres">postgres</option>
-                <option value="mysql">mysql</option>
-              </select>
-              {csvMode && (
-                <span style={{ fontSize: "11px", color: "#555" }}>
-                  locked to duckdb
-                </span>
-              )}
-            </div>
-            <textarea
-              value={queryApprox}
-              onChange={(e) => setQueryApprox(e.target.value)}
-              placeholder="SELECT approx_count_distinct(id) FROM data;"
-              style={{
-                width: "100%",
-                minHeight: "130px",
-                padding: "10px 12px",
-                background: "#1a1a1a",
-                border: "0.5px solid rgba(255,255,255,0.08)",
-                borderRadius: "8px",
-                color: "#e0ddd8",
-                fontFamily: "'JetBrains Mono', monospace",
-                fontSize: "12.5px",
-                lineHeight: 1.65,
-                resize: "vertical",
-                outline: "none",
-              }}
-            />
             <div
               style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr",
-                gap: "8px",
+                display: "flex",
+                alignItems: "center",
+                gap: "10px",
+                padding: "12px 16px",
+                borderBottom: "0.5px solid rgba(255,255,255,0.06)",
               }}
             >
-              <button
-                onClick={() => handleAnalyze("approx")}
+              <span
                 style={{
-                  padding: "9px 12px",
-                  fontFamily: "inherit",
-                  fontWeight: 600,
-                  fontSize: "13px",
-                  borderRadius: "8px",
-                  border: "0.5px solid rgba(186,117,23,0.3)",
-                  background: "rgba(186,117,23,0.15)",
+                  fontSize: "10px",
+                  fontWeight: 700,
+                  letterSpacing: "0.8px",
+                  textTransform: "uppercase",
+                  padding: "3px 9px",
+                  borderRadius: "4px",
+                  background: "rgba(186,117,23,0.18)",
                   color: "#f5b84a",
-                  cursor: "pointer",
                 }}
               >
-                Analyze Query
-              </button>
-              <button
-                onClick={() => handleExecute("approx")}
-                style={{
-                  padding: "9px 12px",
-                  fontFamily: "inherit",
-                  fontWeight: 600,
-                  fontSize: "13px",
-                  borderRadius: "8px",
-                  border: "none",
-                  background: "#BA7517",
-                  color: "#fff",
-                  cursor: "pointer",
-                }}
+                Approx
+              </span>
+              <span style={{ fontSize: "14px", fontWeight: 600 }}>
+                Approx Mode
+              </span>
+              <span
+                style={{ fontSize: "12px", color: "#444", marginLeft: "auto" }}
               >
-                Run Query
-              </button>
+                Estimated results
+              </span>
             </div>
-            {renderResult(
-              resultApprox,
-              errorApprox,
-              csvMode ? "duckdb" : sourceApprox,
-            )}
-            {planApprox && (
-              <div style={{ marginTop: "8px" }}>
-                <div
-                  style={{
-                    fontSize: "12px",
-                    color: "#666",
-                    marginBottom: "6px",
-                  }}
+            <div
+              style={{
+                padding: "16px",
+                display: "flex",
+                flexDirection: "column",
+                gap: "12px",
+              }}
+            >
+              <div
+                style={{ display: "flex", alignItems: "center", gap: "10px" }}
+              >
+                <span
+                  style={{ fontSize: "12px", color: "#666", minWidth: "52px" }}
                 >
-                  Plan tree
-                </div>
-                <pre
+                  Source
+                </span>
+                <select
+                  value={sourceApprox}
+                  onChange={(e) => setSourceApprox(e.target.value as any)}
+                  disabled={csvMode}
                   style={{
-                    background: "#0d0d0d",
-                    padding: "10px",
+                    fontFamily: "inherit",
+                    fontSize: "13px",
+                    padding: "5px 10px",
                     borderRadius: "6px",
-                    fontSize: "11px",
-                    overflowX: "auto",
-                    maxHeight: "180px",
+                    border: "0.5px solid rgba(255,255,255,0.12)",
+                    background: "#1e1e1e",
+                    color: "#ccc",
+                    cursor: csvMode ? "not-allowed" : "pointer",
+                    opacity: csvMode ? 0.5 : 1,
                   }}
                 >
-                  {JSON.stringify(planApprox, null, 2)}
-                </pre>
-                <div
-                  style={{
-                    height: "400px",
-                    marginTop: "10px",
-                    border: "0.5px solid #2a2a2a",
-                    borderRadius: "8px",
-                    overflow: "hidden",
-                  }}
-                >
-                  <PlanGraph plan={planApprox} />
-                </div>
+                  <option value="duckdb">duckdb</option>
+                  <option value="postgres">postgres</option>
+                  <option value="mysql">mysql</option>
+                </select>
+                {csvMode && (
+                  <span style={{ fontSize: "11px", color: "#555" }}>
+                    locked to duckdb
+                  </span>
+                )}
               </div>
-            )}
+              <textarea
+                value={queryApprox}
+                onChange={(e) => setQueryApprox(e.target.value)}
+                placeholder="SELECT approx_count_distinct(id) FROM data;"
+                style={{
+                  width: "100%",
+                  minHeight: "130px",
+                  padding: "10px 12px",
+                  background: "#1a1a1a",
+                  border: "0.5px solid rgba(255,255,255,0.08)",
+                  borderRadius: "8px",
+                  color: "#e0ddd8",
+                  fontFamily: "'JetBrains Mono', monospace",
+                  fontSize: "12.5px",
+                  lineHeight: 1.65,
+                  resize: "vertical",
+                  outline: "none",
+                }}
+              />
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  gap: "8px",
+                }}
+              >
+                <button
+                  onClick={() => handleAnalyze("approx")}
+                  disabled={loadingApprox}
+                  style={{
+                    padding: "9px 12px",
+                    fontFamily: "inherit",
+                    fontWeight: 600,
+                    fontSize: "13px",
+                    borderRadius: "8px",
+                    border: "0.5px solid rgba(186,117,23,0.3)",
+                    background: loadingApprox
+                      ? "rgba(186,117,23,0.1)"
+                      : "rgba(186,117,23,0.15)",
+                    color: "#f5b84a",
+                    cursor: loadingApprox ? "not-allowed" : "pointer",
+                    opacity: loadingApprox ? 0.6 : 1,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: "6px",
+                  }}
+                >
+                  {loadingApprox ? (
+                    <>
+                      <Spinner size={12} />
+                      Analyzing…
+                    </>
+                  ) : (
+                    "Analyze Query"
+                  )}
+                </button>
+                <button
+                  onClick={() => handleExecute("approx")}
+                  disabled={loadingApprox}
+                  style={{
+                    padding: "9px 12px",
+                    fontFamily: "inherit",
+                    fontWeight: 600,
+                    fontSize: "13px",
+                    borderRadius: "8px",
+                    border: "none",
+                    background: loadingApprox ? "#7d5c1a" : "#BA7517",
+                    color: "#fff",
+                    cursor: loadingApprox ? "not-allowed" : "pointer",
+                    opacity: loadingApprox ? 0.6 : 1,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: "6px",
+                  }}
+                >
+                  {loadingApprox ? (
+                    <>
+                      <Spinner size={12} />
+                      Running…
+                    </>
+                  ) : (
+                    "Run Query"
+                  )}
+                </button>
+              </div>
+              {renderResult(
+                resultApprox,
+                errorApprox,
+                csvMode ? "duckdb" : sourceApprox,
+                loadingApprox,
+              )}
+              {planApprox && (
+                <div style={{ marginTop: "8px" }}>
+                  <div
+                    style={{
+                      fontSize: "12px",
+                      color: "#666",
+                      marginBottom: "6px",
+                    }}
+                  >
+                    Plan tree
+                  </div>
+                  <pre
+                    style={{
+                      background: "#0d0d0d",
+                      padding: "10px",
+                      borderRadius: "6px",
+                      fontSize: "11px",
+                      overflowX: "auto",
+                      maxHeight: "180px",
+                    }}
+                  >
+                    {JSON.stringify(planApprox, null, 2)}
+                  </pre>
+                  <div
+                    style={{
+                      height: "400px",
+                      marginTop: "10px",
+                      border: "0.5px solid #2a2a2a",
+                      borderRadius: "8px",
+                      overflow: "hidden",
+                    }}
+                  >
+                    <PlanGraph plan={planApprox} />
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
+
+        {/* Comparison Section - TODO: Fix JSX structure */}
+        {false && (
+          <div>Placeholder</div>
+        )}
       </div>
-    </div>
+    </>
   );
 }
 

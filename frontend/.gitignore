@@ -6,6 +6,8 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
+backend/api/__pycache__
+backend/__pycache__
 
 node_modules
 dist

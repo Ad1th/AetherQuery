@@ -1,9 +1,10 @@
 import logging
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.api.execute import router as execute_router
+from backend.api.execute import router as execute_router, query_history
 from backend.api.optimize import router as optimize_router
 from backend.api.plan import router as plan_router
 from backend.api.upload import router as upload_router
@@ -31,3 +32,9 @@ app.include_router(optimize_router, prefix="/api", tags=["optimize"])
 @app.get("/")
 def root():
     return {"msg": "AetherQuery backend is running"}
+
+
+@app.get("/history")
+def get_history() -> list[dict[str, Any]]:
+    """Get recent query history (latest first)."""
+    return list(query_history)[::-1]

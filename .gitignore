@@ -1,3 +1,7 @@
+backend/api/__pycache__
+backend/__pycache__
+
+backend/.DS_Store
 oldcodes/AetherQuery
 oldcodes/query_executer
 oldcodes/Query_Plan_Matcher
