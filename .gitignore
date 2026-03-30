@@ -2,3 +2,44 @@ backend/api/__pycache__
 backend/__pycache__
 
 backend/.DS_Store
+oldcodes/AetherQuery
+oldcodes/query_executer
+oldcodes/Query_Plan_Matcher
+
+# Python virtual environments
+.venv/
+venv/
+env/
+
+# Python caches and build artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.ipynb_checkpoints/
+
+# Node/Vite caches and build artifacts
+node_modules/
+dist/
+.vite/
+.npm/
+.pnpm-store/
+
+# Editor/OS caches
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/tasks.json
+
+# Logs and temp files
+*.log
+*.tmp
+*.temp
