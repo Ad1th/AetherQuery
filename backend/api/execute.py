@@ -50,6 +50,21 @@ async def execute(req: ExecuteRequest) -> dict[str, Any]:
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    if payload.get("benchmark"):
+        benchmark_response = {**payload, "cached": False}
+        query_cache.set(cache_key, benchmark_response)
+        append_history({
+            "query": req.query,
+            "mode": req.mode,
+            "source": req.source,
+            "result": benchmark_response.get("approx", {}).get("result"),
+            "time": benchmark_response.get("approx", {}).get("time"),
+            "timestamp": time.time(),
+            "cached": False,
+            "cache_key": cache_key
+        })
+        return benchmark_response
+
     response = {
         "result": payload.get("result"),
         "rows": payload.get("rows", payload.get("result")),
@@ -59,6 +74,11 @@ async def execute(req: ExecuteRequest) -> dict[str, Any]:
         "sample_rate": payload.get("sample_rate"),
         "source": payload.get("source", req.source),
         "rewritten_query": payload.get("rewritten_query"),
+        "iterations": payload.get("iterations", []),
+        "mode_profile": payload.get("mode_profile"),
+        "convergence_error": payload.get("convergence_error"),
+        "convergence_threshold": payload.get("convergence_threshold"),
+        "stop_reason": payload.get("stop_reason"),
         "cached": False,
     }
 

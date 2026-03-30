@@ -13,11 +13,12 @@ Unified backend for exact and approximate SQL execution, plan parsing, and plan 
 ## Backend Features
 
 - Execute SQL in exact mode (DuckDB, Postgres, MySQL)
-- Execute SQL in approximate mode for simple COUNT/SUM/AVG queries
+- Execute SQL in approximate mode for COUNT/SUM/AVG queries with optional `WHERE`, `GROUP BY`, multi-aggregate select lists, and runtime sampling
 - Upload CSV and query it through DuckDB
 - Parse query plans for visualization
 - Compare plans with a structural similarity score
 - Lightweight in-memory cache for repeated query requests
+- Benchmark exact vs approximate execution with error and speedup metrics
 
 ## Run
 
@@ -44,6 +45,26 @@ Unified backend for exact and approximate SQL execution, plan parsing, and plan 
 - POST /api/execute
 - POST /api/plan
 - POST /api/optimize
+
+## Approximate Execution Modes
+
+Send `mode` in `POST /api/execute` as one of:
+
+- `exact`
+- `approx` or `balanced`
+- `fast`
+- `accurate`
+- `benchmark`
+
+Example request body:
+
+```json
+{
+  "source": "duckdb",
+  "mode": "benchmark",
+  "query": "SELECT l_returnflag, SUM(l_quantity), COUNT(*) FROM lineitem GROUP BY l_returnflag ORDER BY l_returnflag"
+}
+```
 
 ## Notes
 
