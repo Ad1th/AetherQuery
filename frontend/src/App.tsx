@@ -3,6 +3,19 @@ import PlanGraph from "./components/PlanGraph";
 import QueryCacheSidebar from "./components/QueryCacheSidebar";
 import Spinner from "./components/Spinner";
 
+interface ExecutionProgress {
+  status?: string;
+  phase?: string;
+  message?: string;
+  current_sample_fraction?: number;
+  iterations?: Array<{
+    sample_fraction: number;
+    rows_sampled: number;
+    elapsed_time: number;
+    convergence_error?: number | null;
+  }>;
+}
+
 function App() {
   const [tableName, setTableName] = useState<string | null>(null);
   const [queryExact, setQueryExact] = useState("");
@@ -22,9 +35,48 @@ function App() {
   const [suggestedQueries, setSuggestedQueries] = useState<string[]>([]);
   const [loadingExact, setLoadingExact] = useState(false);
   const [loadingApprox, setLoadingApprox] = useState(false);
+  const [progressExact, setProgressExact] = useState<ExecutionProgress | null>(null);
+  const [progressApprox, setProgressApprox] = useState<ExecutionProgress | null>(null);
 
   const backend = "http://127.0.0.1:8093";
   const csvMode = tableName !== null;
+
+  const makeRequestId = () =>
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+  const startProgressPolling = (
+    requestId: string,
+    setProgress: (value: ExecutionProgress | null) => void,
+  ) => {
+    let active = true;
+
+    const poll = async () => {
+      if (!active) return;
+      try {
+        const res = await fetch(`${backend}/api/sql/execute/progress/${requestId}`);
+        if (res.ok) {
+          const data = (await res.json()) as ExecutionProgress;
+          setProgress(data);
+          if (data.status === "completed" || data.status === "error") {
+            active = false;
+            return;
+          }
+        }
+      } catch {
+        return;
+      }
+      if (active) {
+        setTimeout(poll, 350);
+      }
+    };
+
+    void poll();
+    return () => {
+      active = false;
+    };
+  };
 
   // -----------------------
   // Upload CSV
@@ -92,9 +144,13 @@ function App() {
     const setError = panel === "exact" ? setErrorExact : setErrorApprox;
     const setResult = panel === "exact" ? setResultExact : setResultApprox;
     const setLoading = panel === "exact" ? setLoadingExact : setLoadingApprox;
+    const setProgress = panel === "exact" ? setProgressExact : setProgressApprox;
     if (!query.trim()) return;
     setError(null);
+    setProgress(null);
     setLoading(true);
+    const requestId = makeRequestId();
+    const stopPolling = startProgressPolling(requestId, setProgress);
     try {
       const res = await fetch(`${backend}/api/sql/execute`, {
         method: "POST",
@@ -103,6 +159,7 @@ function App() {
           query,
           mode: panel,
           source: csvMode ? "duckdb" : source,
+          request_id: requestId,
         }),
       });
       const data = await res.json();
@@ -113,6 +170,7 @@ function App() {
       }
       setResult(data);
     } finally {
+      stopPolling();
       setLoading(false);
     }
   };
@@ -124,7 +182,8 @@ function App() {
     result: any,
     error: string | null,
     source: string,
-    loading: boolean = false
+    loading: boolean = false,
+    progress: ExecutionProgress | null = null,
   ) => (
     <div style={{ marginTop: "12px" }}>
       {error && (
@@ -156,17 +215,51 @@ function App() {
         <div
           style={{
             padding: "16px 12px",
-            textAlign: "center",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: "10px",
             color: "#888",
             fontSize: "13px",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "flex-start",
+            gap: "8px",
           }}
         >
-          <Spinner size={14} />
-          <span>Executing query…</span>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: "10px",
+            }}
+          >
+            <Spinner size={14} />
+            <span>{progress?.message ?? "Executing query…"}</span>
+          </div>
+          {progress && (
+            <div
+              style={{
+                width: "100%",
+                padding: "10px 12px",
+                background: "rgba(255,255,255,0.03)",
+                border: "0.5px solid rgba(255,255,255,0.08)",
+                borderRadius: "8px",
+                fontSize: "12px",
+                color: "#aab4bf",
+              }}
+            >
+              <div>Phase: {progress.phase ?? "running"}</div>
+              {typeof progress.current_sample_fraction === "number" && (
+                <div>
+                  Sample: {(progress.current_sample_fraction * 100).toFixed(0)}%
+                </div>
+              )}
+              {progress.iterations && progress.iterations.length > 0 && (
+                <div>
+                  Latest iteration: sampled{" "}
+                  {progress.iterations[progress.iterations.length - 1].rows_sampled} rows
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
       {result && !loading && (
@@ -677,6 +770,7 @@ function App() {
                 errorExact,
                 csvMode ? "duckdb" : sourceExact,
                 loadingExact,
+                progressExact,
               )}
               {planExact && (
                 <div style={{ marginTop: "8px" }}>
@@ -892,6 +986,7 @@ function App() {
                 errorApprox,
                 csvMode ? "duckdb" : sourceApprox,
                 loadingApprox,
+                progressApprox,
               )}
               {planApprox && (
                 <div style={{ marginTop: "8px" }}>

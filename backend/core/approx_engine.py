@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 from backend.core.executor import build_sample_query
 from backend.core.parser import parse_analytical_query
@@ -15,7 +15,12 @@ def _rewrite_agg_query(query: str, source: str, mode: str = "balanced") -> str:
     return build_sample_query(parsed, source_key, first_fraction)
 
 
-def run_approx(query: str, source: str = "duckdb", mode: str = "balanced") -> dict[str, Any]:
+def run_approx(
+    query: str,
+    source: str = "duckdb",
+    mode: str = "balanced",
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
     source_key = source.lower().strip()
     parsed = parse_analytical_query(query)
-    return run_runtime_sampling(parsed, source_key, mode)
+    return run_runtime_sampling(parsed, source_key, mode, progress_callback=progress_callback)

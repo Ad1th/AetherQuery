@@ -23,6 +23,20 @@ interface ExecuteResponse {
   source?: string;
   rewritten_query?: string | null;
   cached?: boolean;
+  request_id?: string;
+}
+
+interface ExecutionProgress {
+  status?: string;
+  phase?: string;
+  message?: string;
+  current_sample_fraction?: number;
+  iterations?: Array<{
+    sample_fraction: number;
+    rows_sampled: number;
+    elapsed_time: number;
+    convergence_error?: number | null;
+  }>;
 }
 
 interface ComparisonState {
@@ -51,6 +65,8 @@ export default function QueryPlanPage() {
   const [error, setError] = useState<string | null>(null);
   const [optimizeNote, setOptimizeNote] = useState<string | null>(null);
   const [comparison, setComparison] = useState<ComparisonState | null>(null);
+  const [executionProgress, setExecutionProgress] =
+    useState<ExecutionProgress | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [lastAction, setLastAction] = useState<
     "analyze" | "execute" | "optimize" | null
@@ -61,6 +77,40 @@ export default function QueryPlanPage() {
 
   const backend = "http://127.0.0.1:8093";
   const loading = isAnalyzing || isExecuting || isOptimizing;
+
+  const makeRequestId = () =>
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+  const startProgressPolling = (requestId: string) => {
+    let active = true;
+
+    const poll = async () => {
+      if (!active) return;
+      try {
+        const res = await fetch(`${backend}/api/sql/execute/progress/${requestId}`);
+        if (res.ok) {
+          const data = (await res.json()) as ExecutionProgress;
+          setExecutionProgress(data);
+          if (data.status === "completed" || data.status === "error") {
+            active = false;
+            return;
+          }
+        }
+      } catch {
+        return;
+      }
+      if (active) {
+        setTimeout(poll, 350);
+      }
+    };
+
+    void poll();
+    return () => {
+      active = false;
+    };
+  };
 
   // Fetch history once on mount
   useEffect(() => {
@@ -170,20 +220,27 @@ export default function QueryPlanPage() {
   };
 
   const runQuery = async (queryText: string, mode: "exact" | "approx") => {
-    const res = await fetch(`${backend}/api/sql/execute`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        query: queryText,
-        mode,
-        source,
-      }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      throw new Error(parseBackendError(data, "Query failed"));
+    const requestId = makeRequestId();
+    const stopPolling = startProgressPolling(requestId);
+    try {
+      const res = await fetch(`${backend}/api/sql/execute`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          query: queryText,
+          mode,
+          source,
+          request_id: requestId,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(parseBackendError(data, "Query failed"));
+      }
+      return data as ExecuteResponse;
+    } finally {
+      stopPolling();
     }
-    return data as ExecuteResponse;
   };
 
   const optimizeQuery = async () => {
@@ -259,6 +316,7 @@ export default function QueryPlanPage() {
     setIsExecuting(true);
     setError(null);
     setComparison(null);
+    setExecutionProgress(null);
 
     try {
       const exactResult = await runQuery(queryText, "exact");
@@ -640,21 +698,55 @@ export default function QueryPlanPage() {
         </div>
 
         {loading && (
-          <div
-            style={{
+        <div
+          style={{
               fontSize: "12px",
               color: "#7f95ad",
               display: "flex",
-              alignItems: "center",
+              flexDirection: "column",
+              alignItems: "flex-start",
               gap: "8px",
             }}
           >
-            <Spinner size={12} />
-            {isOptimizing
-              ? "Optimizing query with rewrite engine..."
-              : isExecuting
-              ? "Executing exact and approximate queries..."
-              : "Analyzing execution plan..."}
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <Spinner size={12} />
+              {isOptimizing
+                ? "Optimizing query with rewrite engine..."
+                : isExecuting
+                ? executionProgress?.message ?? "Executing exact and approximate queries..."
+                : "Analyzing execution plan..."}
+            </div>
+            {isExecuting && executionProgress && (
+              <div
+                style={{
+                  padding: "10px 12px",
+                  background: "rgba(255,255,255,0.03)",
+                  border: "0.5px solid rgba(255,255,255,0.08)",
+                  borderRadius: "8px",
+                  fontSize: "12px",
+                  color: "#aab4bf",
+                }}
+              >
+                <div>Phase: {executionProgress.phase ?? "running"}</div>
+                {typeof executionProgress.current_sample_fraction === "number" && (
+                  <div>
+                    Sample: {(executionProgress.current_sample_fraction * 100).toFixed(0)}%
+                  </div>
+                )}
+                {executionProgress.iterations &&
+                  executionProgress.iterations.length > 0 && (
+                    <div>
+                      Latest iteration: sampled{" "}
+                      {
+                        executionProgress.iterations[
+                          executionProgress.iterations.length - 1
+                        ].rows_sampled
+                      }{" "}
+                      rows
+                    </div>
+                  )}
+              </div>
+            )}
           </div>
         )}
 

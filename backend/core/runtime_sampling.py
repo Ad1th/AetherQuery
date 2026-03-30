@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 import time
-from typing import Any
+from typing import Any, Callable
 
 from backend.core.executor import fetch_sample_frame
 from backend.core.groupby_engine import aggregate_sample
@@ -65,7 +65,12 @@ def _max_convergence_delta(previous: Any, current: Any) -> float:
     return _safe_relative_error(previous, current)
 
 
-def run_runtime_sampling(parsed: ParsedQuery, source: str, mode: str) -> dict[str, Any]:
+def run_runtime_sampling(
+    parsed: ParsedQuery,
+    source: str,
+    mode: str,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
     mode_key = mode if mode in MODE_CONFIGS else "balanced"
     config = MODE_CONFIGS[mode_key]
     start = time.time()
@@ -76,21 +81,37 @@ def run_runtime_sampling(parsed: ParsedQuery, source: str, mode: str) -> dict[st
     final_error: float | None = None
 
     for sample_fraction in config["progression"]:
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "phase": "sampling",
+                    "message": f"Sampling {sample_fraction * 100:.0f}% of rows",
+                    "current_sample_fraction": sample_fraction,
+                }
+            )
         frame, query_time, sample_query = fetch_sample_frame(parsed, source, sample_fraction)
         aggregate_payload = aggregate_sample(frame, parsed, sample_fraction)
         convergence_error = _max_convergence_delta(previous_map, aggregate_payload["result_map"])
         elapsed = time.time() - start
 
-        iteration_details.append(
-            {
-                "sample_fraction": sample_fraction,
-                "rows_sampled": int(len(frame)),
-                "query_time": query_time,
-                "elapsed_time": elapsed,
-                "convergence_error": None if math.isinf(convergence_error) else convergence_error,
-                "sample_query": sample_query,
-            }
-        )
+        iteration_detail = {
+            "sample_fraction": sample_fraction,
+            "rows_sampled": int(len(frame)),
+            "query_time": query_time,
+            "elapsed_time": elapsed,
+            "convergence_error": None if math.isinf(convergence_error) else convergence_error,
+            "sample_query": sample_query,
+        }
+        iteration_details.append(iteration_detail)
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "phase": "sampling",
+                    "message": f"Processed sample {sample_fraction * 100:.0f}%",
+                    "current_sample_fraction": sample_fraction,
+                    "latest_iteration": iteration_detail,
+                }
+            )
 
         final_payload = aggregate_payload
         previous_map = aggregate_payload["result_map"]
@@ -107,6 +128,14 @@ def run_runtime_sampling(parsed: ParsedQuery, source: str, mode: str) -> dict[st
         raise RuntimeError("Runtime sampling failed to produce a result")
 
     total_time = time.time() - start
+    if progress_callback is not None:
+        progress_callback(
+            {
+                "phase": "finalizing",
+                "message": "Finalizing approximate result",
+                "current_sample_fraction": iteration_details[-1]["sample_fraction"],
+            }
+        )
     return {
         **final_payload,
         "time": total_time,

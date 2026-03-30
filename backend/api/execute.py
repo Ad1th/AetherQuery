@@ -1,11 +1,14 @@
 import time
 import hashlib
+import uuid
 from typing import Any
 from collections import deque
 
 from fastapi import APIRouter, HTTPException
+from fastapi.concurrency import run_in_threadpool
 
 from backend.core.cache import query_cache
+from backend.core.progress import execution_progress
 from backend.core.router import route_query
 from backend.models.query import ExecuteRequest
 
@@ -21,6 +24,7 @@ def append_history(entry: dict):
 @router.post("/execute")
 @router.post("/sql/execute")
 async def execute(req: ExecuteRequest) -> dict[str, Any]:
+    request_id = req.request_id or uuid.uuid4().hex
     cache_key = hashlib.sha256(
         f"{req.source}|{req.mode}|{req.query}".encode("utf-8")
     ).hexdigest()
@@ -30,6 +34,13 @@ async def execute(req: ExecuteRequest) -> dict[str, Any]:
     # ✅ Handle cached response
     if cached is not None:
         cached_response = {**cached, "cached": True}
+        execution_progress.start(
+            request_id,
+            query=req.query,
+            source=req.source,
+            mode=req.mode,
+        )
+        execution_progress.finish(request_id, result=cached_response)
 
         append_history({
             "query": req.query,
@@ -42,17 +53,38 @@ async def execute(req: ExecuteRequest) -> dict[str, Any]:
             "cache_key": cache_key
         })
 
-        return cached_response
+        return {**cached_response, "request_id": request_id}
 
     # ✅ Execute fresh query
+    execution_progress.start(
+        request_id,
+        query=req.query,
+        source=req.source,
+        mode=req.mode,
+    )
+
+    def publish_progress(update: dict[str, Any]) -> None:
+        latest_iteration = update.pop("latest_iteration", None)
+        execution_progress.update(request_id, **update)
+        if latest_iteration is not None:
+            execution_progress.append_iteration(request_id, latest_iteration)
+
     try:
-        payload = route_query(req.query, req.mode, req.source)
+        payload = await run_in_threadpool(
+            route_query,
+            req.query,
+            req.mode,
+            req.source,
+            publish_progress,
+        )
     except Exception as exc:
+        execution_progress.fail(request_id, str(exc))
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     if payload.get("benchmark"):
         benchmark_response = {**payload, "cached": False}
         query_cache.set(cache_key, benchmark_response)
+        execution_progress.finish(request_id, result=payload.get("approx"))
         append_history({
             "query": req.query,
             "mode": req.mode,
@@ -63,7 +95,7 @@ async def execute(req: ExecuteRequest) -> dict[str, Any]:
             "cached": False,
             "cache_key": cache_key
         })
-        return benchmark_response
+        return {**benchmark_response, "request_id": request_id}
 
     response = {
         "result": payload.get("result"),
@@ -79,10 +111,12 @@ async def execute(req: ExecuteRequest) -> dict[str, Any]:
         "convergence_error": payload.get("convergence_error"),
         "convergence_threshold": payload.get("convergence_threshold"),
         "stop_reason": payload.get("stop_reason"),
+        "request_id": request_id,
         "cached": False,
     }
 
     query_cache.set(cache_key, response)
+    execution_progress.finish(request_id, result=payload)
 
     append_history({
         "query": req.query,
@@ -96,6 +130,15 @@ async def execute(req: ExecuteRequest) -> dict[str, Any]:
     })
 
     return response
+
+
+@router.get("/execute/progress/{request_id}")
+@router.get("/sql/execute/progress/{request_id}")
+def get_execute_progress(request_id: str) -> dict[str, Any]:
+    progress = execution_progress.get(request_id)
+    if progress is None:
+        raise HTTPException(status_code=404, detail="Progress entry not found")
+    return progress
 
 # ✅ API to fetch history (latest first)
 @router.get("/history")

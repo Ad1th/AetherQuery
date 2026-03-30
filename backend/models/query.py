@@ -5,6 +5,7 @@ class ExecuteRequest(BaseModel):
     query: str = Field(..., min_length=1)
     mode: str = Field(default="exact")
     source: str = Field(default="duckdb")
+    request_id: str | None = None
 
 
 class PlanRequest(BaseModel):

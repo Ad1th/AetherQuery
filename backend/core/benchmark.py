@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 from backend.core.exact_engine import run_exact
 from backend.core.parser import ParsedQuery, parse_analytical_query
@@ -67,10 +67,19 @@ def _mean_relative_error(exact: Any, approx: Any) -> float | None:
     return sum(values) / len(values)
 
 
-def run_benchmark(query: str, source: str, approx_mode: str = "balanced") -> dict[str, Any]:
+def run_benchmark(
+    query: str,
+    source: str,
+    approx_mode: str = "balanced",
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
     parsed = parse_analytical_query(query)
+    if progress_callback is not None:
+        progress_callback({"phase": "exact", "message": "Running exact query"})
     exact_payload = run_exact(query, source)
-    approx_payload = run_runtime_sampling(parsed, source, approx_mode)
+    if progress_callback is not None:
+        progress_callback({"phase": "approx", "message": "Running approximate query"})
+    approx_payload = run_runtime_sampling(parsed, source, approx_mode, progress_callback=progress_callback)
 
     exact_result_map = _normalize_exact_result(parsed, exact_payload)
     approx_result_map = approx_payload["result_map"]
