@@ -33,6 +33,10 @@ interface ComparisonState {
   approxError: string | null;
 }
 
+interface OptimizeResponse {
+  rewritten_query?: string;
+}
+
 export default function QueryPlanPage() {
   const [query, setQuery] = useState("");
   const [source, setSource] = useState<"duckdb" | "postgres" | "mysql">(
@@ -43,18 +47,20 @@ export default function QueryPlanPage() {
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isExecuting, setIsExecuting] = useState(false);
+  const [isOptimizing, setIsOptimizing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [optimizeNote, setOptimizeNote] = useState<string | null>(null);
   const [comparison, setComparison] = useState<ComparisonState | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-  const [lastAction, setLastAction] = useState<"analyze" | "execute" | null>(
-    null,
-  );
+  const [lastAction, setLastAction] = useState<
+    "analyze" | "execute" | "optimize" | null
+  >(null);
   const [activeHistoryIndex, setActiveHistoryIndex] = useState<number | null>(
     null,
   );
 
   const backend = "http://127.0.0.1:8093";
-  const loading = isAnalyzing || isExecuting;
+  const loading = isAnalyzing || isExecuting || isOptimizing;
 
   // Fetch history once on mount
   useEffect(() => {
@@ -178,6 +184,46 @@ export default function QueryPlanPage() {
       throw new Error(parseBackendError(data, "Query failed"));
     }
     return data as ExecuteResponse;
+  };
+
+  const optimizeQuery = async () => {
+    if (!query.trim()) {
+      setError("Please enter a query");
+      return;
+    }
+
+    setLastAction("optimize");
+    setIsOptimizing(true);
+    setError(null);
+    setOptimizeNote(null);
+
+    try {
+      const res = await fetch(`${backend}/api/optimize`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          query,
+          mode: "exact",
+          source,
+        }),
+      });
+      const data = (await res.json().catch(() => ({}))) as OptimizeResponse;
+      if (!res.ok) {
+        setError(parseBackendError(data, "Failed to optimize query"));
+        return;
+      }
+
+      if (data.rewritten_query && data.rewritten_query.trim()) {
+        setQuery(data.rewritten_query);
+        setOptimizeNote("Optimized query applied to editor.");
+      } else {
+        setOptimizeNote("No optimization rewrite was returned for this query.");
+      }
+    } catch (err) {
+      setError(`Error: ${String(err)}`);
+    } finally {
+      setIsOptimizing(false);
+    }
   };
 
   // Analyze query plan
@@ -532,6 +578,36 @@ export default function QueryPlanPage() {
             )}
           </button>
           <button
+            onClick={optimizeQuery}
+            disabled={loading}
+            style={{
+              flex: 1,
+              padding: "9px 12px",
+              fontFamily: "inherit",
+              fontWeight: 600,
+              fontSize: "13px",
+              borderRadius: "8px",
+              border: "0.5px solid rgba(186,117,23,0.3)",
+              background: "rgba(186,117,23,0.15)",
+              color: "#f5b84a",
+              cursor: loading ? "not-allowed" : "pointer",
+              opacity: loading ? 0.6 : 1,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: "8px",
+            }}
+          >
+            {isOptimizing ? (
+              <>
+                <Spinner size={12} />
+                Optimizing...
+              </>
+            ) : (
+              "Optimize Query"
+            )}
+          </button>
+          <button
             onClick={() => executeQuery()}
             disabled={loading}
             style={{
@@ -574,9 +650,26 @@ export default function QueryPlanPage() {
             }}
           >
             <Spinner size={12} />
-            {isExecuting
+            {isOptimizing
+              ? "Optimizing query with rewrite engine..."
+              : isExecuting
               ? "Executing exact and approximate queries..."
               : "Analyzing execution plan..."}
+          </div>
+        )}
+
+        {optimizeNote && (
+          <div
+            style={{
+              fontSize: "12px",
+              color: "#d9bf8f",
+              background: "rgba(245,184,74,0.09)",
+              border: "0.5px solid rgba(245,184,74,0.22)",
+              borderRadius: "6px",
+              padding: "8px 10px",
+            }}
+          >
+            {optimizeNote}
           </div>
         )}
 
@@ -599,7 +692,11 @@ export default function QueryPlanPage() {
             <div style={{ display: "flex", gap: "8px" }}>
               <button
                 onClick={() =>
-                  lastAction === "analyze" ? analyzeQuery() : executeQuery()
+                  lastAction === "analyze"
+                    ? analyzeQuery()
+                    : lastAction === "optimize"
+                      ? optimizeQuery()
+                      : executeQuery()
                 }
                 disabled={loading}
                 style={{
