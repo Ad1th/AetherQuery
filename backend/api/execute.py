@@ -10,6 +10,7 @@ from fastapi.concurrency import run_in_threadpool
 from backend.core.cache import query_cache
 from backend.core.progress import execution_progress
 from backend.core.router import route_query
+from backend.core.sql_syntax import auto_correct_query, suggest_functions
 from backend.models.query import ExecuteRequest
 
 router = APIRouter()
@@ -25,15 +26,23 @@ def append_history(entry: dict):
 @router.post("/sql/execute")
 async def execute(req: ExecuteRequest) -> dict[str, Any]:
     request_id = req.request_id or uuid.uuid4().hex
+    corrected_query = auto_correct_query(req.query)
+    function_suggestions = suggest_functions(corrected_query)
     cache_key = hashlib.sha256(
-        f"{req.source}|{req.mode}|{req.query}".encode("utf-8")
+        f"{req.source}|{req.mode}|{corrected_query}".encode("utf-8")
     ).hexdigest()
 
     cached = query_cache.get(cache_key)
 
     # ✅ Handle cached response
     if cached is not None:
-        cached_response = {**cached, "cached": True}
+        cached_response = {
+            **cached,
+            "original_query": req.query,
+            "corrected_query": corrected_query,
+            "function_suggestions": function_suggestions,
+            "cached": True,
+        }
         execution_progress.start(
             request_id,
             query=req.query,
@@ -44,6 +53,7 @@ async def execute(req: ExecuteRequest) -> dict[str, Any]:
 
         append_history({
             "query": req.query,
+            "corrected_query": corrected_query,
             "mode": req.mode,
             "source": req.source,
             "result": cached_response.get("result"),
@@ -72,7 +82,7 @@ async def execute(req: ExecuteRequest) -> dict[str, Any]:
     try:
         payload = await run_in_threadpool(
             route_query,
-            req.query,
+            corrected_query,
             req.mode,
             req.source,
             publish_progress,
@@ -82,11 +92,18 @@ async def execute(req: ExecuteRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     if payload.get("benchmark"):
-        benchmark_response = {**payload, "cached": False}
+        benchmark_response = {
+            **payload,
+            "original_query": req.query,
+            "corrected_query": corrected_query,
+            "function_suggestions": function_suggestions,
+            "cached": False,
+        }
         query_cache.set(cache_key, benchmark_response)
         execution_progress.finish(request_id, result=payload.get("approx"))
         append_history({
             "query": req.query,
+            "corrected_query": corrected_query,
             "mode": req.mode,
             "source": req.source,
             "result": benchmark_response.get("approx", {}).get("result"),
@@ -106,6 +123,9 @@ async def execute(req: ExecuteRequest) -> dict[str, Any]:
         "sample_rate": payload.get("sample_rate"),
         "source": payload.get("source", req.source),
         "rewritten_query": payload.get("rewritten_query"),
+        "original_query": req.query,
+        "corrected_query": corrected_query,
+        "function_suggestions": function_suggestions,
         "iterations": payload.get("iterations", []),
         "mode_profile": payload.get("mode_profile"),
         "convergence_error": payload.get("convergence_error"),
@@ -120,6 +140,7 @@ async def execute(req: ExecuteRequest) -> dict[str, Any]:
 
     append_history({
         "query": req.query,
+        "corrected_query": corrected_query,
         "mode": req.mode,
         "source": req.source,
         "result": response["result"],
