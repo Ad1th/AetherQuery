@@ -3,6 +3,7 @@ use crate::core::groupby_engine::{aggregate_sample, AggregateResult};
 use crate::core::parser::ParsedQuery;
 use std::collections::HashMap;
 use std::time::Instant;
+use serde::Serialize;
 
 #[derive(Debug, Clone)]
 pub struct ModeConfig {
@@ -11,7 +12,7 @@ pub struct ModeConfig {
     pub time_budget_seconds: f64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct IterationDetail {
     pub sample_fraction: f64,
     pub rows_sampled: usize,
@@ -21,7 +22,10 @@ pub struct IterationDetail {
     pub sample_query: String,
 }
 
-#[derive(Debug, Clone)]
+
+
+
+#[derive(Debug, Clone, Serialize)]
 pub struct RuntimeSamplingResult {
     pub payload: AggregateResult,
     pub sample_rate: f64,
