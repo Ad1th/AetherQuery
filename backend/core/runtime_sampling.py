@@ -98,6 +98,34 @@ def _max_convergence_delta(previous: Any, current: Any) -> float:
     return _safe_relative_error(previous, current)
 
 
+def estimate_confidence(
+    convergence_error: float,
+    sample_fraction: float,
+) -> float:
+    if math.isinf(convergence_error):
+        return 0.0
+
+    confidence_from_error = max(
+        0.0,
+        min(
+            100.0,
+            (1.0 - convergence_error) * 100.0,
+        ),
+    )
+
+    confidence_from_sample = min(
+        100.0,
+        sample_fraction * 100.0,
+    )
+
+    confidence = (
+        confidence_from_error * 0.8
+        + confidence_from_sample * 0.2
+    )
+
+    return round(confidence, 2)
+
+
 def estimate_query_complexity(parsed: ParsedQuery) -> str:
     score = 0
 
@@ -136,10 +164,22 @@ def run_runtime_sampling(
 
     if complexity == "simple":
         config["progression"] = [0.01, 0.03, 0.05]
+        config["time_budget_seconds"] = max(
+            config["time_budget_seconds"],
+            3.0,
+        )
     elif complexity == "medium":
         config["progression"] = [0.01, 0.05, 0.10, 0.20]
+        config["time_budget_seconds"] = max(
+            config["time_budget_seconds"],
+            6.0,
+        )
     else:
         config["progression"] = [0.02, 0.08, 0.15, 0.30, 0.60]
+        config["time_budget_seconds"] = max(
+            config["time_budget_seconds"],
+            12.0,
+        )
 
     start = time.time()
     previous_map: Any = None
@@ -165,6 +205,10 @@ def run_runtime_sampling(
         frame, query_time, sample_query = fetch_sample_frame(parsed, source, sample_fraction)
         aggregate_payload = aggregate_sample(frame, parsed, sample_fraction)
         convergence_error = _max_convergence_delta(previous_map, aggregate_payload["result_map"])
+        confidence = estimate_confidence(
+            convergence_error,
+            sample_fraction,
+        )
         elapsed = time.time() - start
 
         iteration_detail = {
@@ -173,6 +217,7 @@ def run_runtime_sampling(
             "query_time": query_time,
             "elapsed_time": elapsed,
             "convergence_error": None if math.isinf(convergence_error) else convergence_error,
+            "confidence": confidence,
             "sample_query": sample_query,
         }
         iteration_details.append(iteration_detail)
@@ -191,10 +236,19 @@ def run_runtime_sampling(
         previous_map = aggregate_payload["result_map"]
         final_error = convergence_error
 
-        if len(frame) > 0 and not math.isinf(convergence_error) and convergence_error < config["convergence_threshold"]:
+        if (
+            len(iteration_details) >= 2
+            and len(frame) > 0
+            and not math.isinf(convergence_error)
+            and convergence_error < config["convergence_threshold"]
+        ):
             stop_reason = "converged"
             break
-        if elapsed >= config["time_budget_seconds"]:
+
+        if (
+            elapsed >= config["time_budget_seconds"]
+            and len(iteration_details) >= 2
+        ):
             stop_reason = "time_budget_exceeded"
             break
 
@@ -202,6 +256,10 @@ def run_runtime_sampling(
         raise RuntimeError("Runtime sampling failed to produce a result")
 
     total_time = time.time() - start
+    final_confidence = estimate_confidence(
+        final_error if final_error is not None else math.inf,
+        iteration_details[-1]["sample_fraction"],
+    )
     if progress_callback is not None:
         progress_callback(
             {
@@ -222,6 +280,12 @@ def run_runtime_sampling(
         "sample_rate": iteration_details[-1]["sample_fraction"],
         "iterations": iteration_details,
         "convergence_error": None if final_error is None or math.isinf(final_error) else final_error,
+        "confidence": final_confidence,
+        "estimated_error": (
+            None
+            if final_error is None or math.isinf(final_error)
+            else round(final_error * 100.0, 2)
+        ),
         "convergence_threshold": config["convergence_threshold"],
         "stop_reason": stop_reason,
         "rewritten_query": iteration_details[-1]["sample_query"],
