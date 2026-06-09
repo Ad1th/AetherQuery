@@ -2,7 +2,6 @@ use duckdb::{Connection, Result};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use std::env;
-use std::path::PathBuf;
 use std::sync::Mutex;
 use uuid::Uuid;
 
@@ -47,7 +46,7 @@ pub fn safe_identifier(name: &str) -> String {
     clean.to_lowercase()
 }
 
-pub fn create_table_from_csv(
+pub async fn create_table_from_csv(
     csv_path: &str,
     table_name: Option<&str>,
 ) -> Result<String> {
@@ -73,7 +72,7 @@ pub fn create_table_from_csv(
     Ok(safe_name)
 }
 
-pub fn execute_query(query: &str) -> Result<QueryResult> {
+pub async fn execute_query(query: &str) -> Result<QueryResult> {
     let conn = get_connection();
     let conn = conn.lock().unwrap();
 
@@ -111,7 +110,7 @@ pub fn execute_query(query: &str) -> Result<QueryResult> {
     })
 }
 
-pub fn explain_query(
+pub async fn explain_query(
     query: &str,
     analyze: bool,
 ) -> Result<QueryResult> {
@@ -121,5 +120,5 @@ pub fn explain_query(
         "EXPLAIN"
     };
 
-    execute_query(&format!("{} {}", prefix, query))
+    execute_query(&format!("{} {}", prefix, query)).await
 }
