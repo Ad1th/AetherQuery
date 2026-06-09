@@ -95,7 +95,9 @@ export default function QueryPlanPage() {
     const poll = async () => {
       if (!active) return;
       try {
-        const res = await fetch(`${backend}/api/sql/execute/progress/${requestId}`);
+        const res = await fetch(
+          `${backend}/api/sql/execute/progress/${requestId}`,
+        );
         if (res.ok) {
           const data = (await res.json()) as ExecutionProgress;
           setExecutionProgress(data);
@@ -172,7 +174,10 @@ export default function QueryPlanPage() {
   };
 
   const extractScalarValue = (response: ExecuteResponse) => {
-    if (typeof response.result === "number" && Number.isFinite(response.result)) {
+    if (
+      typeof response.result === "number" &&
+      Number.isFinite(response.result)
+    ) {
       return response.result;
     }
 
@@ -209,10 +214,15 @@ export default function QueryPlanPage() {
       }
 
       if (typeof data === "object" && data !== null) {
-        const typedData = data as { plan_tree?: unknown; explanation?: unknown };
+        const typedData = data as {
+          plan_tree?: unknown;
+          explanation?: unknown;
+        };
         setPlan((typedData.plan_tree as any) ?? null);
         setPlanExplanation(
-          typeof typedData.explanation === "string" ? typedData.explanation : null,
+          typeof typedData.explanation === "string"
+            ? typedData.explanation
+            : null,
         );
       } else {
         setPlan(null);
@@ -346,14 +356,13 @@ export default function QueryPlanPage() {
             : typeof exactResult.time === "number"
               ? exactResult.time
               : null,
-        approxTime:
-          approxResult
-            ? typeof approxResult.old_time === "number"
-              ? approxResult.old_time
-              : typeof approxResult.time === "number"
-                ? approxResult.time
-                : null
-            : null,
+        approxTime: approxResult
+          ? typeof approxResult.old_time === "number"
+            ? approxResult.old_time
+            : typeof approxResult.time === "number"
+              ? approxResult.time
+              : null
+          : null,
         approxError,
       });
 
@@ -407,10 +416,14 @@ export default function QueryPlanPage() {
             style={{ accentColor: "#f5b84a" }}
           />
           <div>
-            <div style={{ fontSize: "12px", fontWeight: 700, color: "#f0d2a3" }}>
+            <div
+              style={{ fontSize: "12px", fontWeight: 700, color: "#f0d2a3" }}
+            >
               Accuracy Target
             </div>
-            <div style={{ fontSize: "11px", color: "#b5976b", marginTop: "2px" }}>
+            <div
+              style={{ fontSize: "11px", color: "#b5976b", marginTop: "2px" }}
+            >
               Optional. Enable it only when you want a fixed target.
             </div>
           </div>
@@ -469,119 +482,120 @@ export default function QueryPlanPage() {
             flexDirection: "column",
           }}
         >
-        {/* Header */}
-        <div
-          style={{
-            padding: "12px 16px",
-            borderBottom: "0.5px solid rgba(255,255,255,0.06)",
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-          }}
-        >
-          <h3
+          {/* Header */}
+          <div
             style={{
-              margin: 0,
-              fontSize: "13px",
-              fontWeight: 600,
-              textTransform: "uppercase",
-              letterSpacing: "0.5px",
-              color: "#aaa",
+              padding: "12px 16px",
+              borderBottom: "0.5px solid rgba(255,255,255,0.06)",
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
             }}
           >
-            Recent Queries
-          </h3>
-          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-            <button
-              onClick={clearBackendCache}
-              title="Clear cache"
+            <h3
               style={{
-                background: "transparent",
-                border: "0.5px solid rgba(255,255,255,0.16)",
-                color: "#999",
-                cursor: "pointer",
-                fontSize: "10px",
-                borderRadius: "4px",
-                padding: "2px 6px",
+                margin: 0,
+                fontSize: "13px",
+                fontWeight: 600,
+                textTransform: "uppercase",
+                letterSpacing: "0.5px",
+                color: "#aaa",
               }}
             >
-              Clear Cache
-            </button>
-            <button
-              onClick={() => setIsSidebarOpen(false)}
-              title="Close sidebar"
-              style={{
-                background: "transparent",
-                border: "none",
-                color: "#666",
-                cursor: "pointer",
-                fontSize: "12px",
-                padding: 0,
-              }}
-            >
-              ✕
-            </button>
-          </div>
-        </div>
-
-        {/* History List */}
-        <div style={{ flex: 1, overflowY: "auto" }}>
-          {history.length === 0 ? (
-            <div style={{ padding: "16px", color: "#666", fontSize: "12px" }}>
-              No queries yet. Write and run a query to see history.
-            </div>
-          ) : (
-            history.map((item, i) => (
-              <div
-                key={i}
-                onClick={() => handleHistoryClick(item, i)}
+              Recent Queries
+            </h3>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <button
+                onClick={clearBackendCache}
+                title="Clear cache"
                 style={{
-                  padding: "10px 12px",
-                  borderBottom: "0.5px solid rgba(255,255,255,0.04)",
+                  background: "transparent",
+                  border: "0.5px solid rgba(255,255,255,0.16)",
+                  color: "#999",
                   cursor: "pointer",
-                  background:
-                    activeHistoryIndex === i
-                      ? "rgba(90,170,245,0.1)"
-                      : "transparent",
-                  transition: "background 0.15s",
-                }}
-                onMouseEnter={(e) => {
-                  if (activeHistoryIndex !== i) {
-                    e.currentTarget.style.background = "rgba(255,255,255,0.03)";
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  if (activeHistoryIndex !== i) {
-                    e.currentTarget.style.background = "transparent";
-                  }
+                  fontSize: "10px",
+                  borderRadius: "4px",
+                  padding: "2px 6px",
                 }}
               >
-                <code
+                Clear Cache
+              </button>
+              <button
+                onClick={() => setIsSidebarOpen(false)}
+                title="Close sidebar"
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color: "#666",
+                  cursor: "pointer",
+                  fontSize: "12px",
+                  padding: 0,
+                }}
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+
+          {/* History List */}
+          <div style={{ flex: 1, overflowY: "auto" }}>
+            {history.length === 0 ? (
+              <div style={{ padding: "16px", color: "#666", fontSize: "12px" }}>
+                No queries yet. Write and run a query to see history.
+              </div>
+            ) : (
+              history.map((item, i) => (
+                <div
+                  key={i}
+                  onClick={() => handleHistoryClick(item, i)}
                   style={{
-                    fontSize: "11px",
-                    color: "#bbb",
-                    display: "block",
-                    whiteSpace: "nowrap",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    marginBottom: "4px",
+                    padding: "10px 12px",
+                    borderBottom: "0.5px solid rgba(255,255,255,0.04)",
+                    cursor: "pointer",
+                    background:
+                      activeHistoryIndex === i
+                        ? "rgba(90,170,245,0.1)"
+                        : "transparent",
+                    transition: "background 0.15s",
+                  }}
+                  onMouseEnter={(e) => {
+                    if (activeHistoryIndex !== i) {
+                      e.currentTarget.style.background =
+                        "rgba(255,255,255,0.03)";
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (activeHistoryIndex !== i) {
+                      e.currentTarget.style.background = "transparent";
+                    }
                   }}
                 >
-                  {item.query}
-                </code>
-                <div style={{ fontSize: "10px", color: "#666" }}>
-                  <span style={{ marginRight: "8px" }}>{item.source}</span>
-                  <span style={{ marginRight: "8px" }}>
-                    {item.time.toFixed(3)}s
-                  </span>
-                  {item.cached && (
-                    <span style={{ color: "#5aaaf5" }}>cached</span>
-                  )}
+                  <code
+                    style={{
+                      fontSize: "11px",
+                      color: "#bbb",
+                      display: "block",
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      marginBottom: "4px",
+                    }}
+                  >
+                    {item.query}
+                  </code>
+                  <div style={{ fontSize: "10px", color: "#666" }}>
+                    <span style={{ marginRight: "8px" }}>{item.source}</span>
+                    <span style={{ marginRight: "8px" }}>
+                      {item.time.toFixed(3)}s
+                    </span>
+                    {item.cached && (
+                      <span style={{ color: "#5aaaf5" }}>cached</span>
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))
-          )}
-        </div>
+              ))
+            )}
+          </div>
         </div>
       )}
 
@@ -818,8 +832,8 @@ export default function QueryPlanPage() {
         </div>
 
         {loading && (
-        <div
-          style={{
+          <div
+            style={{
               fontSize: "12px",
               color: "#7f95ad",
               display: "flex",
@@ -833,8 +847,9 @@ export default function QueryPlanPage() {
               {isOptimizing
                 ? "Optimizing query with rewrite engine..."
                 : isExecuting
-                ? executionProgress?.message ?? "Executing exact and approximate queries..."
-                : "Analyzing execution plan..."}
+                  ? (executionProgress?.message ??
+                    "Executing exact and approximate queries...")
+                  : "Analyzing execution plan..."}
             </div>
             {isExecuting && executionProgress && (
               <div
@@ -848,26 +863,77 @@ export default function QueryPlanPage() {
                 }}
               >
                 <div>Phase: {executionProgress.phase ?? "running"}</div>
-                {typeof executionProgress.current_sample_fraction === "number" && (
+                {typeof executionProgress.current_sample_fraction ===
+                  "number" && (
                   <div>
-                    Sample: {(executionProgress.current_sample_fraction * 100).toFixed(0)}%
+                    Sample:{" "}
+                    {(executionProgress.current_sample_fraction * 100).toFixed(
+                      0,
+                    )}
+                    %
                   </div>
                 )}
                 {typeof executionProgress.accuracy_target === "number" && (
                   <div>
-                    Target accuracy: {executionProgress.accuracy_target.toFixed(0)}%
+                    Target accuracy:{" "}
+                    {executionProgress.accuracy_target.toFixed(0)}%
                   </div>
                 )}
                 {executionProgress.iterations &&
                   executionProgress.iterations.length > 0 && (
-                    <div>
-                      Latest iteration: sampled{" "}
-                      {
-                        executionProgress.iterations[
-                          executionProgress.iterations.length - 1
-                        ].rows_sampled
-                      }{" "}
-                      rows
+                    <div style={{ marginTop: "10px" }}>
+                      <div
+                        style={{
+                          fontSize: "11px",
+                          fontWeight: 700,
+                          color: "#f5b84a",
+                          marginBottom: "6px",
+                          textTransform: "uppercase",
+                        }}
+                      >
+                        Live Runtime Sampling
+                      </div>
+                      <div
+                        style={{
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: "6px",
+                        }}
+                      >
+                        {executionProgress.iterations.map((iteration, idx) => (
+                          <div
+                            key={idx}
+                            style={{
+                              background: "rgba(255,255,255,0.03)",
+                              border: "0.5px solid rgba(255,255,255,0.08)",
+                              borderRadius: "6px",
+                              padding: "8px",
+                              fontSize: "11px",
+                            }}
+                          >
+                            <div style={{ fontWeight: 600 }}>
+                              Iteration {idx + 1}
+                            </div>
+                            <div>
+                              Sample:{" "}
+                              {(iteration.sample_fraction * 100).toFixed(2)}%
+                            </div>
+                            <div>
+                              Rows Sampled:{" "}
+                              {iteration.rows_sampled.toLocaleString()}
+                            </div>
+                            <div>
+                              Elapsed: {iteration.elapsed_time.toFixed(2)}s
+                            </div>
+                            {iteration.convergence_error != null && (
+                              <div>
+                                Convergence Error:{" "}
+                                {iteration.convergence_error.toFixed(6)}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   )}
               </div>
@@ -974,6 +1040,36 @@ export default function QueryPlanPage() {
               exactTimeSeconds={comparison.exactTime}
               approxTimeSeconds={comparison.approxTime}
             />
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(4, minmax(0,1fr))",
+                gap: "8px",
+                marginBottom: "10px",
+                marginTop: "10px",
+              }}
+            >
+              <div style={{ fontSize: "11px" }}>
+                <div style={{ color: "#777" }}>Exact Time</div>
+                <div>{comparison.exactTime?.toFixed(3) ?? "n/a"}s</div>
+              </div>
+              <div style={{ fontSize: "11px" }}>
+                <div style={{ color: "#777" }}>Approx Time</div>
+                <div>{comparison.approxTime?.toFixed(3) ?? "n/a"}s</div>
+              </div>
+              <div style={{ fontSize: "11px" }}>
+                <div style={{ color: "#777" }}>Speedup</div>
+                <div>
+                  {comparison.exactTime && comparison.approxTime
+                    ? `${(comparison.exactTime / comparison.approxTime).toFixed(2)}x`
+                    : "n/a"}
+                </div>
+              </div>
+              <div style={{ fontSize: "11px" }}>
+                <div style={{ color: "#777" }}>Status</div>
+                <div>Exact vs Approx</div>
+              </div>
+            </div>
             <div
               title={`Exact: ${formatNumber(comparison.exactValue)} | Approx: ${formatNumber(
                 comparison.approxValue,
