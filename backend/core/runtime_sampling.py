@@ -153,22 +153,52 @@ def estimate_confidence(
 def estimate_query_complexity(parsed: ParsedQuery) -> str:
     score = 0
 
-    if parsed.group_by:
-        score += 2
+    score += len(parsed.group_by) * 2
 
     if parsed.order_by:
-        score += 1
+        score += len(parsed.order_by)
 
     if parsed.where_clause:
+        score += 2
+
+    score += len(parsed.aggregates)
+
+    for aggregate in parsed.aggregates:
+        func = aggregate.func.lower()
+
+        if func in {"avg", "sum"}:
+            score += 1
+
+        if func == "count":
+            score += 1
+
+        column_text = ""
+
+        if hasattr(aggregate, "column"):
+            column_text = str(getattr(aggregate, "column") or "")
+        elif hasattr(aggregate, "expression"):
+            column_text = str(getattr(aggregate, "expression") or "")
+
+        column_text = column_text.lower()
+
+        if "distinct" in column_text:
+            score += 4
+
+    query_text = parsed.original_query.lower()
+
+    if " join " in query_text:
+        score += query_text.count(" join ") * 4
+
+    if " having " in query_text:
+        score += 3
+
+    if parsed.limit is None:
         score += 1
 
-    if len(parsed.aggregates) > 1:
-        score += 1
-
-    if score <= 1:
+    if score <= 4:
         return "simple"
 
-    if score <= 3:
+    if score <= 10:
         return "medium"
 
     return "complex"
@@ -187,19 +217,21 @@ def run_runtime_sampling(
     complexity = estimate_query_complexity(parsed)
 
     if complexity == "simple":
-        config["progression"] = [0.01, 0.03, 0.05]
+        config["progression"] = [0.005, 0.01, 0.02, 0.05]
         config["time_budget_seconds"] = max(
             config["time_budget_seconds"],
             3.0,
         )
+
     elif complexity == "medium":
-        config["progression"] = [0.01, 0.05, 0.10, 0.20]
+        config["progression"] = [0.01, 0.03, 0.05, 0.10, 0.20]
         config["time_budget_seconds"] = max(
             config["time_budget_seconds"],
             6.0,
         )
+
     else:
-        config["progression"] = [0.02, 0.08, 0.15, 0.30, 0.60]
+        config["progression"] = [0.02, 0.05, 0.10, 0.20, 0.40, 0.60]
         config["time_budget_seconds"] = max(
             config["time_budget_seconds"],
             12.0,

@@ -61,6 +61,10 @@ class ParsedQuery:
     limit: int | None = None
 
     @property
+    def original_query(self) -> str:
+        return self.raw_sql
+
+    @property
     def projection_columns(self) -> list[str]:
         columns = list(dict.fromkeys(self.group_by))
         expression_sources = [*self.group_by]
