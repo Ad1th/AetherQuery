@@ -420,6 +420,69 @@ function App() {
               <span>Result loaded from cache</span>
             </div>
           )}
+          {/* Approximation Report card */}
+          {result.approx && (
+            <div
+              style={{
+                marginBottom: "12px",
+                padding: "12px",
+                borderRadius: "10px",
+                background: "rgba(245,184,74,0.08)",
+                border: "0.5px solid rgba(245,184,74,0.25)",
+              }}
+            >
+              <div
+                style={{
+                  fontSize: "12px",
+                  fontWeight: 700,
+                  color: "#f5b84a",
+                  marginBottom: "10px",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.5px",
+                }}
+              >
+                Approximation Report
+              </div>
+
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(2, minmax(0,1fr))",
+                  gap: "8px",
+                  fontSize: "12px",
+                }}
+              >
+                <div>
+                  <strong>Confidence:</strong>{" "}
+                  {result.iterations?.length
+                    ? `${result.iterations[result.iterations.length - 1].confidence ?? 0}%`
+                    : "n/a"}
+                </div>
+                <div>
+                  <strong>Convergence:</strong>{" "}
+                  {result.convergence_error ?? "n/a"}
+                </div>
+                <div>
+                  <strong>Stop Reason:</strong>{" "}
+                  {result.stop_reason ?? "n/a"}
+                </div>
+                <div>
+                  <strong>Iterations:</strong>{" "}
+                  {result.iterations?.length ?? 0}
+                </div>
+                <div>
+                  <strong>Final Sample:</strong>{" "}
+                  {result.sample_rate
+                    ? `${(result.sample_rate * 100).toFixed(1)}%`
+                    : "n/a"}
+                </div>
+                <div>
+                  <strong>Mode Profile:</strong>{" "}
+                  {result.mode_profile ?? "n/a"}
+                </div>
+              </div>
+            </div>
+          )}
           <div
             style={{
               fontSize: "12px",
@@ -504,6 +567,51 @@ function App() {
               </pre>
             </div>
           )}
+
+          {/* Iteration Timeline */}
+          {result.approx &&
+            Array.isArray(result.iterations) &&
+            result.iterations.length > 0 && (
+              <div style={{ marginBottom: "12px" }}>
+                <div
+                  style={{
+                    fontSize: "12px",
+                    color: "#888",
+                    marginBottom: "6px",
+                  }}
+                >
+                  Iteration Timeline
+                </div>
+
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "6px",
+                  }}
+                >
+                  {result.iterations.map((it: any, idx: number) => (
+                    <div
+                      key={idx}
+                      style={{
+                        background: "#111",
+                        border: "0.5px solid #2a2a2a",
+                        borderRadius: "6px",
+                        padding: "8px",
+                        fontSize: "11px",
+                      }}
+                    >
+                      <strong>Iteration {idx + 1}</strong> • Sample {(it.sample_fraction * 100).toFixed(2)}% • Rows {it.rows_sampled?.toLocaleString?.() ?? it.rows_sampled} • Confidence {it.confidence ?? 0}%
+                      {it.convergence_error != null && (
+                        <span>
+                          {" "}• Convergence {it.convergence_error}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
           {Array.isArray(result.rows) && result.rows.length > 0 && (
             <div style={{ overflowX: "auto" }}>
