@@ -15,6 +15,7 @@ pub fn route_query(
         return run_benchmark(
             query,
             source,
+            "balanced",
             accuracy_target,
         );
     }
@@ -37,5 +38,8 @@ pub fn route_query(
         );
     }
 
-    run_exact(query, source)
+    let result = run_exact(query, source)?;
+
+    serde_json::to_value(result)
+        .map_err(|e| e.to_string())
 }

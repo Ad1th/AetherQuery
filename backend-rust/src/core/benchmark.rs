@@ -1,6 +1,5 @@
 use serde_json::{json, Map, Value};
-
-use crate::core::exact_engine::run_exact;
+use crate::core::exact_engine::{run_exact, ExactQueryResult};
 use crate::core::parser::{
     parse_analytical_query,
     ParsedQuery,
@@ -9,13 +8,12 @@ use crate::core::runtime_sampling::run_runtime_sampling;
 
 fn normalize_exact_result(
     parsed: &ParsedQuery,
-    payload: &Value,
+    payload: &ExactQueryResult,
 ) -> Value {
-    let rows = payload
-        .get("result")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
+    let rows = match serde_json::to_value(&payload.result) {
+        Ok(Value::Array(arr)) => arr,
+        _ => vec![],
+    };
 
     if parsed.group_by.is_empty() {
         if rows.is_empty() {
@@ -176,7 +174,11 @@ pub fn run_benchmark(
             source,
             approx_mode,
             accuracy_target,
-        )?;
+        );
+
+    let approx_result_map =
+        serde_json::to_value(&approx_payload.payload.result_map)
+            .unwrap_or(json!({}));
 
     let exact_result_map =
         normalize_exact_result(
@@ -184,27 +186,15 @@ pub fn run_benchmark(
             &exact_payload,
         );
 
-    let approx_result_map =
-        approx_payload
-            .get("result_map")
-            .cloned()
-            .unwrap_or(json!({}));
-
     let error_ratio =
         mean_relative_error(
             &exact_result_map,
             &approx_result_map,
         );
 
-    let exact_time =
-        exact_payload["time"]
-            .as_f64()
-            .unwrap_or(0.0);
+    let exact_time = exact_payload.time;
 
-    let approx_time =
-        approx_payload["time"]
-            .as_f64()
-            .unwrap_or(0.0);
+    let approx_time = approx_payload.total_time;
 
     Ok(json!({
         "benchmark": true,
@@ -213,20 +203,20 @@ pub fn run_benchmark(
         "accuracy_target": accuracy_target,
 
         "exact": {
-            "result": exact_payload.get("result"),
-            "columns": exact_payload.get("columns"),
+            "result": exact_payload.result,
+            "columns": exact_payload.columns,
             "time": exact_time
         },
 
         "approx": {
-            "result": approx_payload.get("result"),
-            "rows": approx_payload.get("rows"),
-            "columns": approx_payload.get("columns"),
+            "result": approx_payload.payload.result,
+            "rows": approx_payload.payload.rows,
+            "columns": approx_payload.payload.columns,
             "time": approx_time,
-            "sample_rate": approx_payload.get("sample_rate"),
-            "accuracy_target": approx_payload.get("accuracy_target"),
-            "iterations": approx_payload.get("iterations"),
-            "stop_reason": approx_payload.get("stop_reason")
+            "sample_rate": approx_payload.sample_rate,
+            "accuracy_target": approx_payload.accuracy_target,
+            "iterations": approx_payload.iterations,
+            "stop_reason": approx_payload.stop_reason
         },
 
         "speedup":

@@ -1,7 +1,8 @@
 use crate::core::parser::{AggregateSpec, ParsedQuery};
 use std::collections::HashMap;
+use serde::Serialize;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct AggregateResult {
     pub result: Vec<Vec<String>>,
     pub rows: Vec<Vec<String>>,

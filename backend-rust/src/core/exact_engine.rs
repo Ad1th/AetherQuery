@@ -1,8 +1,9 @@
 
 
 use std::time::Instant;
+use serde::Serialize;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ExactQueryResult {
     pub result: Vec<Vec<String>>,
     pub columns: Vec<String>,
