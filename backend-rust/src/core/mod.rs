@@ -7,3 +7,4 @@ pub mod groupby_engine;
 pub mod runtime_sampling;
 pub mod exact_engine;
 pub mod router;
+pub mod approx_engine;
