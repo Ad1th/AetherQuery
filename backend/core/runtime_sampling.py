@@ -98,6 +98,30 @@ def _max_convergence_delta(previous: Any, current: Any) -> float:
     return _safe_relative_error(previous, current)
 
 
+def estimate_query_complexity(parsed: ParsedQuery) -> str:
+    score = 0
+
+    if parsed.group_by:
+        score += 2
+
+    if parsed.order_by:
+        score += 1
+
+    if parsed.where_clause:
+        score += 1
+
+    if len(parsed.aggregates) > 1:
+        score += 1
+
+    if score <= 1:
+        return "simple"
+
+    if score <= 3:
+        return "medium"
+
+    return "complex"
+
+
 def run_runtime_sampling(
     parsed: ParsedQuery,
     source: str,
@@ -107,6 +131,16 @@ def run_runtime_sampling(
 ) -> dict[str, Any]:
     mode_key = mode if mode in MODE_CONFIGS else "balanced"
     config = _derive_accuracy_config(mode_key, accuracy_target)
+
+    complexity = estimate_query_complexity(parsed)
+
+    if complexity == "simple":
+        config["progression"] = [0.01, 0.03, 0.05]
+    elif complexity == "medium":
+        config["progression"] = [0.01, 0.05, 0.10, 0.20]
+    else:
+        config["progression"] = [0.02, 0.08, 0.15, 0.30, 0.60]
+
     start = time.time()
     previous_map: Any = None
     final_payload: dict[str, Any] | None = None
@@ -183,6 +217,7 @@ def run_runtime_sampling(
         "approx": True,
         "source": source,
         "mode_profile": mode_key,
+        "query_complexity": complexity,
         "accuracy_target": config.get("accuracy_target"),
         "sample_rate": iteration_details[-1]["sample_fraction"],
         "iterations": iteration_details,
