@@ -1,4 +1,5 @@
 mod core;
+mod db;
 
 use core::parser::parse_analytical_query;
 
