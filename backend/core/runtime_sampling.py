@@ -202,7 +202,7 @@ def estimate_query_complexity(parsed: ParsedQuery) -> str:
         return "medium"
 
     return "complex"
-
+ 
 
 def run_runtime_sampling(
     parsed: ParsedQuery,
