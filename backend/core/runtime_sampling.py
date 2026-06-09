@@ -30,6 +30,30 @@ MODE_CONFIGS: dict[str, dict[str, Any]] = {
 BASE_PROGRESSIONS = [0.01, 0.05, 0.10, 0.25, 0.50, 0.75, 1.00]
 
 
+def next_adaptive_sample_fraction(
+    current_fraction: float,
+    confidence: float,
+) -> float | None:
+    if current_fraction >= 1.0:
+        return None
+
+    if confidence < 50:
+        next_fraction = current_fraction * 4.0
+    elif confidence < 70:
+        next_fraction = current_fraction * 2.0
+    elif confidence < 90:
+        next_fraction = current_fraction * 1.5
+    else:
+        next_fraction = current_fraction * 1.25
+
+    next_fraction = min(1.0, next_fraction)
+
+    if next_fraction <= current_fraction:
+        return None
+
+    return round(next_fraction, 4)
+
+
 def _derive_accuracy_config(mode: str, accuracy_target: float | None) -> dict[str, Any]:
     mode_key = mode if mode in MODE_CONFIGS else "balanced"
     config = dict(MODE_CONFIGS[mode_key])
@@ -188,7 +212,11 @@ def run_runtime_sampling(
     stop_reason = "progression_exhausted"
     final_error: float | None = None
 
-    for sample_fraction in config["progression"]:
+    progression = list(config["progression"])
+    position = 0
+
+    while position < len(progression):
+        sample_fraction = progression[position]
         if progress_callback is not None:
             progress_callback(
                 {
@@ -251,6 +279,19 @@ def run_runtime_sampling(
         ):
             stop_reason = "time_budget_exceeded"
             break
+
+        adaptive_next = next_adaptive_sample_fraction(
+            sample_fraction,
+            confidence,
+        )
+
+        if (
+            adaptive_next is not None
+            and adaptive_next not in progression
+        ):
+            progression.insert(position + 1, adaptive_next)
+
+        position += 1
 
     if final_payload is None:
         raise RuntimeError("Runtime sampling failed to produce a result")
