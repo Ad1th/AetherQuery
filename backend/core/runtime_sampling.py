@@ -214,28 +214,36 @@ def run_runtime_sampling(
     mode_key = mode if mode in MODE_CONFIGS else "balanced"
     config = _derive_accuracy_config(mode_key, accuracy_target)
 
+    single_pass_mode = (
+        mode_key == "balanced"
+        and accuracy_target is None
+    )
+
     complexity = estimate_query_complexity(parsed)
 
-    if complexity == "simple":
-        config["progression"] = [0.005, 0.01, 0.02, 0.05]
-        config["time_budget_seconds"] = max(
-            config["time_budget_seconds"],
-            3.0,
-        )
+    if not single_pass_mode:
+        if complexity == "simple":
+            config["progression"] = [0.005, 0.01, 0.02, 0.05]
+            config["time_budget_seconds"] = max(
+                config["time_budget_seconds"],
+                3.0,
+            )
 
-    elif complexity == "medium":
-        config["progression"] = [0.01, 0.03, 0.05, 0.10, 0.20]
-        config["time_budget_seconds"] = max(
-            config["time_budget_seconds"],
-            6.0,
-        )
+        elif complexity == "medium":
+            config["progression"] = [0.01, 0.03, 0.05, 0.10, 0.20]
+            config["time_budget_seconds"] = max(
+                config["time_budget_seconds"],
+                6.0,
+            )
 
+        else:
+            config["progression"] = [0.02, 0.05, 0.10, 0.20, 0.40, 0.60]
+            config["time_budget_seconds"] = max(
+                config["time_budget_seconds"],
+                12.0,
+            )
     else:
-        config["progression"] = [0.02, 0.05, 0.10, 0.20, 0.40, 0.60]
-        config["time_budget_seconds"] = max(
-            config["time_budget_seconds"],
-            12.0,
-        )
+        config["progression"] = [0.01]
 
     start = time.time()
     previous_map: Any = None
@@ -296,6 +304,10 @@ def run_runtime_sampling(
         previous_map = aggregate_payload["result_map"]
         final_error = convergence_error
 
+        if single_pass_mode:
+            stop_reason = "single_pass"
+            break
+
         if (
             len(iteration_details) >= 2
             and len(frame) > 0
@@ -312,16 +324,17 @@ def run_runtime_sampling(
             stop_reason = "time_budget_exceeded"
             break
 
-        adaptive_next = next_adaptive_sample_fraction(
-            sample_fraction,
-            confidence,
-        )
+        if not single_pass_mode:
+            adaptive_next = next_adaptive_sample_fraction(
+                sample_fraction,
+                confidence,
+            )
 
-        if (
-            adaptive_next is not None
-            and adaptive_next not in progression
-        ):
-            progression.insert(position + 1, adaptive_next)
+            if (
+                adaptive_next is not None
+                and adaptive_next not in progression
+            ):
+                progression.insert(position + 1, adaptive_next)
 
         position += 1
 
