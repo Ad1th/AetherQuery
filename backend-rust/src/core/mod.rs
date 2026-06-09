@@ -8,3 +8,4 @@ pub mod runtime_sampling;
 pub mod exact_engine;
 pub mod router;
 pub mod approx_engine;
+pub mod benchmark;
