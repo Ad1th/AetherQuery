@@ -16,13 +16,28 @@ def _render_aggregate_sql(aggregate: AggregateSpec) -> str:
     expression = aggregate.expression.strip()
     if aggregate.is_count_star:
         return f"COUNT(*) AS {aggregate.alias}"
+
+    func = aggregate.func.lower()
+
+    if func == "avg":
+        return (
+            f"AVG(CAST({expression} AS DOUBLE)) "
+            f"AS {aggregate.alias}"
+        )
+
+    if func == "sum":
+        return (
+            f"SUM(CAST({expression} AS DOUBLE)) "
+            f"AS {aggregate.alias}"
+        )
+
     return f"{aggregate.func.upper()}({expression}) AS {aggregate.alias}"
 
 
 def _scale_value(aggregate: AggregateSpec, value: Any, sample_fraction: float) -> Any:
     if value is None or pd.isna(value):
         return None
-    if aggregate.func in {"sum", "count"}:
+    if aggregate.func.lower() in {"sum", "count"}:
         return float(value) / sample_fraction
     return float(value)
 
@@ -41,7 +56,7 @@ def _scale_frame(parsed: ParsedQuery, frame: pd.DataFrame, sample_fraction: floa
     for aggregate in parsed.aggregates:
         if aggregate.alias not in scaled.columns:
             continue
-        if aggregate.func in {"sum", "count"}:
+        if aggregate.func.lower() in {"sum", "count"}:
             scaled[aggregate.alias] = scaled[aggregate.alias].astype(float) / sample_fraction
         else:
             scaled[aggregate.alias] = scaled[aggregate.alias].astype(float)
