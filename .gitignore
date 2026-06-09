@@ -44,3 +44,46 @@ dist/
 *.tmp
 *.temp
 datasets/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# Rust
+target/
+
+# Node
+node_modules/
+dist/
+
+# Environment
+.env
+.env.local
+.env.*
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+
+# Databases
+*.db
+*.duckdb
+
+# Generated datasets
+datasets/*.csv
+
+# VS Code
+.vscode/
+
+# Python tooling
+.pytest_cache/
+.mypy_cache/
+
+# Coverage
+.coverage
+htmlcov/
