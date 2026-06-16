@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+import time
 
 import pandas as pd
 
@@ -67,3 +68,46 @@ def fetch_sample_frame(parsed: ParsedQuery, source: str, sample_fraction: float)
     payload = _execute_source_query(sql, source)
     frame = pd.DataFrame(payload.get("rows", []), columns=payload.get("columns", []))
     return frame, float(payload.get("time", 0.0)), sql
+
+
+def fetch_aggregated_sample(parsed: ParsedQuery, source: str, sample_fraction: float) -> tuple[dict[str, Any], float, str]:
+    """
+    Execute sampled aggregation directly inside the source engine.
+    Avoids materializing hundreds of thousands / millions of sampled rows
+    into pandas before aggregation.
+    """
+
+    if not parsed.aggregates:
+        raise ValueError("fetch_aggregated_sample requires aggregate query metadata")
+
+    if source == "duckdb":
+        percent = sample_fraction * 100.0
+        from_clause = f"{parsed.table} TABLESAMPLE SYSTEM ({percent:.4f} PERCENT)"
+    else:
+        sample_clause = _sample_clause(source, sample_fraction)
+        if sample_clause:
+            from_clause = f"(SELECT * FROM {parsed.table} {sample_clause}) sampled_source"
+        else:
+            from_clause = parsed.table
+
+    select_parts: list[str] = []
+
+    if getattr(parsed, "group_by", None):
+        select_parts.extend(parsed.group_by)
+
+    select_parts.extend(parsed.aggregates)
+
+    sql = f"SELECT {', '.join(select_parts)} FROM {from_clause}"
+
+    if parsed.where_clause:
+        sql += f" WHERE ({parsed.where_clause})"
+
+    if getattr(parsed, "group_by", None):
+        sql += f" GROUP BY {', '.join(parsed.group_by)}"
+
+    start = time.perf_counter()
+    payload = _execute_source_query(sql, source)
+    elapsed = time.perf_counter() - start
+
+    query_time = float(payload.get("time", elapsed))
+    return payload, query_time, sql
