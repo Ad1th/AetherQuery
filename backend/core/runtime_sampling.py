@@ -4,7 +4,7 @@ import math
 import time
 from typing import Any, Callable
 
-from backend.core.executor import fetch_sample_frame
+from backend.core.executor import fetch_sample_frame, fetch_aggregated_sample
 from backend.core.groupby_engine import aggregate_sample
 from backend.core.parser import ParsedQuery
 
@@ -270,8 +270,30 @@ def run_runtime_sampling(
                     "accuracy_target": config.get("accuracy_target"),
                 }
             )
-        frame, query_time, sample_query = fetch_sample_frame(parsed, source, sample_fraction)
-        aggregate_payload = aggregate_sample(frame, parsed, sample_fraction)
+        if (
+            source == "duckdb"
+            and getattr(parsed, "aggregates", None)
+        ):
+            aggregate_payload, query_time, sample_query = fetch_aggregated_sample(
+                parsed,
+                source,
+                sample_fraction,
+            )
+            rows_sampled = None
+            frame_length = 1
+        else:
+            frame, query_time, sample_query = fetch_sample_frame(
+                parsed,
+                source,
+                sample_fraction,
+            )
+            aggregate_payload = aggregate_sample(
+                frame,
+                parsed,
+                sample_fraction,
+            )
+            rows_sampled = int(len(frame))
+            frame_length = len(frame)
         convergence_error = _max_convergence_delta(previous_map, aggregate_payload["result_map"])
         confidence = estimate_confidence(
             convergence_error,
@@ -281,7 +303,7 @@ def run_runtime_sampling(
 
         iteration_detail = {
             "sample_fraction": sample_fraction,
-            "rows_sampled": int(len(frame)),
+            "rows_sampled": rows_sampled,
             "query_time": query_time,
             "elapsed_time": elapsed,
             "convergence_error": None if math.isinf(convergence_error) else convergence_error,
@@ -310,7 +332,7 @@ def run_runtime_sampling(
 
         if (
             len(iteration_details) >= 2
-            and len(frame) > 0
+            and frame_length > 0
             and not math.isinf(convergence_error)
             and convergence_error < config["convergence_threshold"]
         ):
