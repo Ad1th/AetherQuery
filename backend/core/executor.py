@@ -20,12 +20,25 @@ def _sample_clause(source: str, sample_fraction: float) -> str:
 def build_sample_query(parsed: ParsedQuery, source: str, sample_fraction: float) -> str:
     select_list = ", ".join(parsed.projection_columns) if parsed.projection_columns else "1 AS __aqp_count_marker"
     sample_clause = _sample_clause(source, sample_fraction)
+
+    # For DuckDB, use TABLESAMPLE instead of random() predicates.
+    # This avoids evaluating random() on every row and dramatically
+    # reduces sampling overhead on large tables.
+    if source == "duckdb":
+        percent = sample_fraction * 100.0
+        query = (
+            f"SELECT {select_list} "
+            f"FROM {parsed.table} TABLESAMPLE SYSTEM ({percent:.4f} PERCENT)"
+        )
+        if parsed.where_clause:
+            query += f" WHERE ({parsed.where_clause})"
+        return query
+
     where_parts: list[str] = []
     if parsed.where_clause:
         where_parts.append(f"({parsed.where_clause})")
-    if source == "duckdb":
-        where_parts.append(f"(random() < {sample_fraction:.8f})")
-    elif source == "mysql":
+
+    if source == "mysql":
         where_parts.append(f"(RAND() < {sample_fraction:.8f})")
 
     if sample_clause:
@@ -35,6 +48,7 @@ def build_sample_query(parsed: ParsedQuery, source: str, sample_fraction: float)
 
     if where_parts:
         query = f"{query} WHERE {' AND '.join(where_parts)}"
+
     return query
 
 
