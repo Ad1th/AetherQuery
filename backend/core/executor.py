@@ -95,7 +95,13 @@ def fetch_aggregated_sample(parsed: ParsedQuery, source: str, sample_fraction: f
     if getattr(parsed, "group_by", None):
         select_parts.extend(parsed.group_by)
 
-    select_parts.extend(parsed.aggregates)
+    for aggregate in parsed.aggregates:
+        if aggregate.is_count_star:
+            select_parts.append(f"COUNT(*) AS {aggregate.alias}")
+        else:
+            select_parts.append(
+                f"{aggregate.func.upper()}({aggregate.expression}) AS {aggregate.alias}"
+            )
 
     sql = f"SELECT {', '.join(select_parts)} FROM {from_clause}"
 
