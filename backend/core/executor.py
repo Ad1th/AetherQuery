@@ -115,5 +115,25 @@ def fetch_aggregated_sample(parsed: ParsedQuery, source: str, sample_fraction: f
     payload = _execute_source_query(sql, source)
     elapsed = time.perf_counter() - start
 
+    rows = payload.get("rows", [])
+    columns = payload.get("columns", [])
+
+    result_map: dict[str, Any] = {}
+
+    for index, row in enumerate(rows):
+        row_dict = dict(zip(columns, row))
+
+        if getattr(parsed, "group_by", None):
+            key = tuple(row_dict[column] for column in parsed.group_by)
+            result_map[str(key)] = row_dict
+        else:
+            result_map[f"row_{index}"] = row_dict
+
+    aggregate_payload = {
+        "columns": columns,
+        "rows": rows,
+        "result_map": result_map,
+    }
+
     query_time = float(payload.get("time", elapsed))
-    return payload, query_time, sql
+    return aggregate_payload, query_time, sql
