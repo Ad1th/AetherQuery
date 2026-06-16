@@ -145,9 +145,14 @@ def fetch_aggregated_sample(parsed: ParsedQuery, source: str, sample_fraction: f
         else:
             result_map[f"row_{index}"] = row_dict
 
+    scaled_rows = []
+
+    for entry in result_map.values():
+        scaled_rows.append([entry[column] for column in columns])
+
     aggregate_payload = {
         "columns": columns,
-        "rows": rows,
+        "rows": scaled_rows,
         "result_map": result_map,
     }
 
