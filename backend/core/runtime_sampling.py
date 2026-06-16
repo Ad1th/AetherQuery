@@ -270,10 +270,7 @@ def run_runtime_sampling(
                     "accuracy_target": config.get("accuracy_target"),
                 }
             )
-        if (
-            source == "duckdb"
-            and getattr(parsed, "aggregates", None)
-        ):
+        if getattr(parsed, "aggregates", None):
             aggregate_payload, query_time, sample_query = fetch_aggregated_sample(
                 parsed,
                 source,
