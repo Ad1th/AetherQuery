@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from decimal import Decimal
 import time
 
 import pandas as pd
@@ -122,6 +123,21 @@ def fetch_aggregated_sample(parsed: ParsedQuery, source: str, sample_fraction: f
 
     for index, row in enumerate(rows):
         row_dict = dict(zip(columns, row))
+        scale_factor = Decimal(str(1.0 / sample_fraction))
+
+        for aggregate in parsed.aggregates:
+            alias = aggregate.alias
+
+            if alias not in row_dict:
+                continue
+
+            func = aggregate.func.lower()
+
+            if func in ("sum", "count"):
+                value = row_dict[alias]
+
+                if value is not None:
+                    row_dict[alias] = value * scale_factor
 
         if getattr(parsed, "group_by", None):
             key = tuple(row_dict[column] for column in parsed.group_by)
