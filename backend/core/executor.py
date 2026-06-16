@@ -137,7 +137,7 @@ def fetch_aggregated_sample(parsed: ParsedQuery, source: str, sample_fraction: f
                 value = row_dict[alias]
 
                 if value is not None:
-                    row_dict[alias] = value * scale_factor
+                    row_dict[alias] = Decimal(str(value)) * scale_factor
 
         if getattr(parsed, "group_by", None):
             key = tuple(row_dict[column] for column in parsed.group_by)
