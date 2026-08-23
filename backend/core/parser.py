@@ -205,18 +205,26 @@ def _parse_joins(query_from_onwards: str, base_table: str) -> tuple[list[JoinSpe
     joins: list[JoinSpec] = []
     remaining = query_from_onwards
 
-    # Pattern to match JOIN clauses: [INNER|LEFT|RIGHT|FULL] JOIN table ON condition
+    # Pattern to match JOIN clauses with optional table alias
+    # Format: [INNER|LEFT|RIGHT|FULL] JOIN table [alias] ON condition
     join_pattern = re.compile(
         r"(?is)\s+((?:inner|left|right|full(?:\s+outer)?)\s+)?join\s+"
-        r"([a-zA-Z_][a-zA-Z0-9_]*)\s+on\s+(.+?)(?=\s+(?:inner|left|right|full|join|where|group|order|limit|$))",
+        r"([a-zA-Z_][a-zA-Z0-9_]*)"  # table name
+        r"(?:\s+([a-zA-Z_][a-zA-Z0-9_]*))?"  # optional alias
+        r"\s+on\s+"
+        r"(.+?)"  # ON condition
+        r"(?=\s+(?:inner|left|right|full|join|where|group|order|limit)\s+|\s*$)",
     )
 
-    for match in join_pattern.finditer(remaining):
+    matches = list(join_pattern.finditer(remaining))
+
+    for match in matches:
         join_type = (match.group(1) or "inner").strip().upper()
         if "OUTER" in join_type:
             join_type = join_type.replace("OUTER", "").strip()
         right_table = match.group(2).strip()
-        on_condition = match.group(3).strip()
+        # Optional alias captured in group(3)
+        on_condition = match.group(4).strip()
 
         joins.append(JoinSpec(
             join_type=join_type,
@@ -233,9 +241,10 @@ def _parse_joins(query_from_onwards: str, base_table: str) -> tuple[list[JoinSpe
 def parse_analytical_query(query: str) -> ParsedQuery:
     normalized = query.strip().rstrip(";")
 
-    # Enhanced pattern to capture optional JOIN clauses
+    # Enhanced pattern to capture table name with optional alias
     match = re.match(
         r"(?is)^select\s+(?P<select>.+?)\s+from\s+(?P<table>[a-zA-Z_][a-zA-Z0-9_]*)"
+        r"(?:\s+(?P<alias>[a-zA-Z_][a-zA-Z0-9_]*))?"
         r"(?P<remainder>.*?)$",
         normalized,
     )
