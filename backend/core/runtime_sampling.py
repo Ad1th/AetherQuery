@@ -224,15 +224,40 @@ def run_runtime_sampling(
     mode_key = mode if mode in MODE_CONFIGS else "balanced"
     config = _derive_accuracy_config(mode_key, accuracy_target)
 
+    # CRITICAL FIX: Never use single-pass mode for JOIN queries
+    # JOINs require adaptive progression to find matching rows at optimal sample rates
     single_pass_mode = (
         mode_key == "balanced"
         and accuracy_target is None
+        and not parsed.has_joins  # Force multi-iteration for JOINs
     )
 
     complexity = estimate_query_complexity(parsed)
 
     # Apply JOIN complexity multiplier to time budgets
     join_multiplier = estimate_join_complexity_multiplier(parsed) if parsed.has_joins else 1.0
+
+    # INTELLIGENT SAMPLE RATE SELECTION FOR JOINS
+    # Increase minimum sample rate for JOINs to ensure sufficient matching rows
+    if parsed.has_joins and not single_pass_mode:
+        # Use HyperLogLog-guided minimum rate based on join cardinality
+        # For now, use conservative minimums (will add HLL prediction later)
+        num_joins = len(parsed.joins) if parsed.joins else 0
+
+        if num_joins >= 3:
+            # 3+ way joins: start at 10% minimum
+            min_sample_rate = 0.10
+        elif num_joins >= 2:
+            # 2-way joins: start at 7% minimum
+            min_sample_rate = 0.07
+        else:
+            # Single join: start at 5% minimum
+            min_sample_rate = 0.05
+
+        # Adjust progression to start at minimum rate
+        config["progression"] = [s for s in config.get("progression", []) if s >= min_sample_rate]
+        if not config["progression"] or config["progression"][0] > min_sample_rate:
+            config["progression"].insert(0, min_sample_rate)
 
     if not single_pass_mode:
         if complexity == "simple":
