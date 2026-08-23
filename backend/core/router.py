@@ -1,8 +1,8 @@
 from typing import Any, Callable
 
-from backend.core.benchmark import run_benchmark
-from backend.core.approx_engine import run_approx
-from backend.core.exact_engine import run_exact
+from core.benchmark import run_benchmark
+from core.approx_engine import run_approx
+from core.exact_engine import run_exact
 
 
 def route_query(
