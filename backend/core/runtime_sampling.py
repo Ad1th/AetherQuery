@@ -7,6 +7,10 @@ from typing import Any, Callable
 from backend.core.executor import fetch_sample_frame, fetch_aggregated_sample
 from backend.core.groupby_engine import aggregate_sample
 from backend.core.parser import ParsedQuery
+from backend.core.join_sampling import (
+    execute_stratified_join_sample,
+    estimate_join_complexity_multiplier,
+)
 
 
 MODE_CONFIGS: dict[str, dict[str, Any]] = {
@@ -184,10 +188,16 @@ def estimate_query_complexity(parsed: ParsedQuery) -> str:
         if "distinct" in column_text:
             score += 4
 
-    query_text = parsed.original_query.lower()
+    # Use parsed JOIN information for more accurate scoring
+    if parsed.has_joins:
+        score += len(parsed.joins) * 4
 
-    if " join " in query_text:
-        score += query_text.count(" join ") * 4
+        # Additional penalty for outer joins
+        for join in parsed.joins:
+            if join.join_type != "INNER":
+                score += 2
+
+    query_text = parsed.original_query.lower()
 
     if " having " in query_text:
         score += 3
@@ -221,26 +231,29 @@ def run_runtime_sampling(
 
     complexity = estimate_query_complexity(parsed)
 
+    # Apply JOIN complexity multiplier to time budgets
+    join_multiplier = estimate_join_complexity_multiplier(parsed) if parsed.has_joins else 1.0
+
     if not single_pass_mode:
         if complexity == "simple":
             config["progression"] = [0.005, 0.01, 0.02, 0.05]
             config["time_budget_seconds"] = max(
                 config["time_budget_seconds"],
-                3.0,
+                3.0 * join_multiplier,
             )
 
         elif complexity == "medium":
             config["progression"] = [0.01, 0.03, 0.05, 0.10, 0.20]
             config["time_budget_seconds"] = max(
                 config["time_budget_seconds"],
-                6.0,
+                6.0 * join_multiplier,
             )
 
         else:
             config["progression"] = [0.02, 0.05, 0.10, 0.20, 0.40, 0.60]
             config["time_budget_seconds"] = max(
                 config["time_budget_seconds"],
-                12.0,
+                12.0 * join_multiplier,
             )
     else:
         config["progression"] = [0.01]
@@ -270,7 +283,17 @@ def run_runtime_sampling(
                     "accuracy_target": config.get("accuracy_target"),
                 }
             )
-        if getattr(parsed, "aggregates", None):
+
+        # Route to JOIN-specific execution if query contains JOINs
+        if parsed.has_joins:
+            aggregate_payload, query_time, sample_query = execute_stratified_join_sample(
+                parsed,
+                source,
+                sample_fraction,
+            )
+            rows_sampled = None
+            frame_length = 1
+        elif getattr(parsed, "aggregates", None):
             aggregate_payload, query_time, sample_query = fetch_aggregated_sample(
                 parsed,
                 source,

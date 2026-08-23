@@ -50,6 +50,13 @@ class OrderBySpec:
 
 
 @dataclass(frozen=True)
+class JoinSpec:
+    join_type: str  # INNER, LEFT, RIGHT, FULL
+    right_table: str
+    on_condition: str
+
+
+@dataclass(frozen=True)
 class ParsedQuery:
     raw_sql: str
     table: str
@@ -59,10 +66,23 @@ class ParsedQuery:
     where_clause: str | None = None
     order_by: list[OrderBySpec] | None = None
     limit: int | None = None
+    joins: list[JoinSpec] | None = None
 
     @property
     def original_query(self) -> str:
         return self.raw_sql
+
+    @property
+    def has_joins(self) -> bool:
+        return self.joins is not None and len(self.joins) > 0
+
+    @property
+    def all_tables(self) -> list[str]:
+        """Return all tables involved in the query (base + joined tables)"""
+        tables = [self.table]
+        if self.joins:
+            tables.extend([join.right_table for join in self.joins])
+        return tables
 
     @property
     def projection_columns(self) -> list[str]:
@@ -177,19 +197,72 @@ def _parse_order_by(order_by_clause: str | None, parsed: ParsedQuery | None = No
     return order_specs
 
 
+def _parse_joins(query_from_onwards: str, base_table: str) -> tuple[list[JoinSpec], str]:
+    """
+    Extract JOIN clauses from query string.
+    Returns (list of JoinSpecs, remaining query after joins)
+    """
+    joins: list[JoinSpec] = []
+    remaining = query_from_onwards
+
+    # Pattern to match JOIN clauses: [INNER|LEFT|RIGHT|FULL] JOIN table ON condition
+    join_pattern = re.compile(
+        r"(?is)\s+((?:inner|left|right|full(?:\s+outer)?)\s+)?join\s+"
+        r"([a-zA-Z_][a-zA-Z0-9_]*)\s+on\s+(.+?)(?=\s+(?:inner|left|right|full|join|where|group|order|limit|$))",
+    )
+
+    for match in join_pattern.finditer(remaining):
+        join_type = (match.group(1) or "inner").strip().upper()
+        if "OUTER" in join_type:
+            join_type = join_type.replace("OUTER", "").strip()
+        right_table = match.group(2).strip()
+        on_condition = match.group(3).strip()
+
+        joins.append(JoinSpec(
+            join_type=join_type,
+            right_table=right_table,
+            on_condition=on_condition,
+        ))
+
+    # Remove all JOIN clauses from remaining query
+    remaining = join_pattern.sub("", remaining)
+
+    return joins, remaining
+
+
 def parse_analytical_query(query: str) -> ParsedQuery:
     normalized = query.strip().rstrip(";")
+
+    # Enhanced pattern to capture optional JOIN clauses
     match = re.match(
         r"(?is)^select\s+(?P<select>.+?)\s+from\s+(?P<table>[a-zA-Z_][a-zA-Z0-9_]*)"
-        r"(?:\s+where\s+(?P<where>.+?))?"
-        r"(?:\s+group\s+by\s+(?P<group_by>.+?))?"
-        r"(?:\s+order\s+by\s+(?P<order_by>.+?))?"
-        r"(?:\s+limit\s+(?P<limit>\d+))?$",
+        r"(?P<remainder>.*?)$",
         normalized,
     )
     if not match:
         raise ValueError(
-            "Approx mode supports SELECT aggregate queries on one table with optional WHERE/GROUP BY/ORDER BY/LIMIT"
+            "Approx mode supports SELECT aggregate queries with optional JOINs/WHERE/GROUP BY/ORDER BY/LIMIT"
+        )
+
+    base_table = match.group("table")
+    remainder = match.group("remainder")
+
+    # Parse JOINs first
+    joins, remainder = _parse_joins(remainder, base_table)
+
+    # Now parse WHERE/GROUP BY/ORDER BY/LIMIT from the remainder
+    clause_match = re.match(
+        r"(?is)^\s*"
+        r"(?:where\s+(?P<where>.+?))?"
+        r"(?:\s+group\s+by\s+(?P<group_by>.+?))?"
+        r"(?:\s+order\s+by\s+(?P<order_by>.+?))?"
+        r"(?:\s+limit\s+(?P<limit>\d+))?\s*$",
+        remainder,
+    )
+
+    if not clause_match:
+        raise ValueError(
+            "Invalid SQL syntax in WHERE/GROUP BY/ORDER BY/LIMIT clauses"
         )
 
     select_items = _split_top_level_csv(match.group("select"))
@@ -204,7 +277,7 @@ def parse_analytical_query(query: str) -> ParsedQuery:
     if not aggregates:
         raise ValueError("Approx mode requires at least one aggregate expression")
 
-    group_by = _split_top_level_csv(match.group("group_by")) if match.group("group_by") else []
+    group_by = _split_top_level_csv(clause_match.group("group_by")) if clause_match.group("group_by") else []
     normalized_plain = [column.lower() for column in plain_columns]
     normalized_group = [column.lower() for column in group_by]
     if normalized_plain != normalized_group:
@@ -212,14 +285,15 @@ def parse_analytical_query(query: str) -> ParsedQuery:
 
     parsed = ParsedQuery(
         raw_sql=normalized,
-        table=match.group("table"),
+        table=base_table,
         select_items=select_items,
         aggregates=aggregates,
         group_by=group_by,
-        where_clause=match.group("where").strip() if match.group("where") else None,
-        limit=int(match.group("limit")) if match.group("limit") else None,
+        where_clause=clause_match.group("where").strip() if clause_match.group("where") else None,
+        limit=int(clause_match.group("limit")) if clause_match.group("limit") else None,
+        joins=joins if joins else None,
     )
-    order_by = _parse_order_by(match.group("order_by"), parsed=parsed)
+    order_by = _parse_order_by(clause_match.group("order_by"), parsed=parsed)
     return ParsedQuery(
         raw_sql=parsed.raw_sql,
         table=parsed.table,
@@ -229,4 +303,5 @@ def parse_analytical_query(query: str) -> ParsedQuery:
         where_clause=parsed.where_clause,
         order_by=order_by,
         limit=parsed.limit,
+        joins=parsed.joins,
     )
