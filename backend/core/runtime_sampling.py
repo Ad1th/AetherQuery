@@ -4,10 +4,10 @@ import math
 import time
 from typing import Any, Callable
 
-from backend.core.executor import fetch_sample_frame, fetch_aggregated_sample
-from backend.core.groupby_engine import aggregate_sample
-from backend.core.parser import ParsedQuery
-from backend.core.join_sampling import (
+from core.executor import fetch_sample_frame, fetch_aggregated_sample
+from core.groupby_engine import aggregate_sample
+from core.parser import ParsedQuery
+from core.join_sampling import (
     execute_stratified_join_sample,
     estimate_join_complexity_multiplier,
 )
