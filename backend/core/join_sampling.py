@@ -18,8 +18,8 @@ from typing import Any
 
 import pandas as pd
 
-from backend.core.executor import _execute_source_query
-from backend.core.parser import ParsedQuery, JoinSpec
+from core.executor import _execute_source_query
+from core.parser import ParsedQuery, JoinSpec
 
 
 class HyperLogLog:
@@ -215,9 +215,29 @@ def build_stratified_join_query(
     - Sample each table independently at the same rate
     - Preserves join selectivity better than sampling after join
     - Uses TABLESAMPLE when available for efficiency
+
+    Note: We rebuild the full query from the original SQL to preserve table aliases,
+    since the parser doesn't currently capture them in the ParsedQuery structure.
     """
     if not parsed.joins:
         raise ValueError("build_stratified_join_query requires a query with JOINs")
+
+    # Extract the original FROM clause with aliases from raw SQL
+    # This preserves table aliases that users specify (e.g., "FROM lineitem l")
+    import re
+
+    original_sql = parsed.raw_sql
+
+    # Find the FROM clause up to WHERE/GROUP BY/ORDER BY/LIMIT
+    from_match = re.search(
+        r'(?is)\bFROM\s+(.+?)(?:\s+WHERE|\s+GROUP\s+BY|\s+ORDER\s+BY|\s+LIMIT|$)',
+        original_sql
+    )
+
+    if not from_match:
+        raise ValueError("Could not extract FROM clause from original query")
+
+    from_clause_original = from_match.group(1).strip()
 
     # Build SELECT clause
     select_parts: list[str] = []
@@ -235,39 +255,38 @@ def build_stratified_join_query(
 
     select_clause = f"SELECT {', '.join(select_parts)}"
 
-    # Build FROM clause with sampling
+    # Inject TABLESAMPLE into the FROM clause
     percent = sample_fraction * 100.0
 
     if source == "duckdb":
-        from_clause = f"FROM {parsed.table} TABLESAMPLE SYSTEM ({percent:.4f} PERCENT)"
+        # Replace table names with sampled versions
+        # Pattern: table_name [alias] -> table_name TABLESAMPLE SYSTEM (x%) [alias]
+        from_clause = re.sub(
+            r'(?i)\b(FROM|JOIN)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+([a-zA-Z_][a-zA-Z0-9_]*)',
+            rf'\1 \2 TABLESAMPLE SYSTEM ({percent:.4f} PERCENT) \3',
+            from_clause_original
+        )
+        # Also handle table names without aliases
+        from_clause = re.sub(
+            r'(?i)\b(FROM|JOIN)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+(ON|WHERE|GROUP|ORDER|LIMIT|INNER|LEFT|RIGHT|FULL|$)',
+            rf'\1 \2 TABLESAMPLE SYSTEM ({percent:.4f} PERCENT) \3',
+            from_clause
+        )
     elif source == "postgres":
-        from_clause = f"FROM {parsed.table} TABLESAMPLE SYSTEM ({percent:.4f})"
-    else:  # MySQL - will add WHERE RAND() later
-        from_clause = f"FROM {parsed.table}"
+        from_clause = re.sub(
+            r'(?i)\b(FROM|JOIN)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+([a-zA-Z_][a-zA-Z0-9_]*)',
+            rf'\1 \2 TABLESAMPLE SYSTEM ({percent:.4f}) \3',
+            from_clause_original
+        )
+        from_clause = re.sub(
+            r'(?i)\b(FROM|JOIN)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+(ON|WHERE|GROUP|ORDER|LIMIT|INNER|LEFT|RIGHT|FULL|$)',
+            rf'\1 \2 TABLESAMPLE SYSTEM ({percent:.4f}) \3',
+            from_clause
+        )
+    else:  # MySQL - no TABLESAMPLE, will use WHERE RAND()
+        from_clause = from_clause_original
 
-    # Build JOIN clauses with sampling
-    join_clauses = []
-    for join in parsed.joins:
-        if source == "duckdb":
-            join_clause = (
-                f"{join.join_type} JOIN {join.right_table} "
-                f"TABLESAMPLE SYSTEM ({percent:.4f} PERCENT) "
-                f"ON {join.on_condition}"
-            )
-        elif source == "postgres":
-            join_clause = (
-                f"{join.join_type} JOIN {join.right_table} "
-                f"TABLESAMPLE SYSTEM ({percent:.4f}) "
-                f"ON {join.on_condition}"
-            )
-        else:  # MySQL
-            join_clause = (
-                f"{join.join_type} JOIN {join.right_table} "
-                f"ON {join.on_condition}"
-            )
-        join_clauses.append(join_clause)
-
-    query = f"{select_clause} {from_clause} {' '.join(join_clauses)}"
+    query = f"{select_clause} FROM {from_clause}"
 
     # Add WHERE clause (including MySQL sampling predicate)
     where_parts = []
