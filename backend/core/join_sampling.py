@@ -259,29 +259,18 @@ def build_stratified_join_query(
     percent = sample_fraction * 100.0
 
     if source == "duckdb":
-        # Replace table names with sampled versions
-        # Pattern: table_name [alias] -> table_name TABLESAMPLE SYSTEM (x%) [alias]
+        # DuckDB syntax: table_name alias TABLESAMPLE SYSTEM (x%)
+        # Pattern: table_name alias -> table_name alias TABLESAMPLE SYSTEM (x%)
         from_clause = re.sub(
-            r'(?i)\b(FROM|JOIN)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+([a-zA-Z_][a-zA-Z0-9_]*)',
-            rf'\1 \2 TABLESAMPLE SYSTEM ({percent:.4f} PERCENT) \3',
+            r'(?i)\b(FROM|JOIN)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+',
+            rf'\1 \2 \3 TABLESAMPLE SYSTEM ({percent:.4f} PERCENT) ',
             from_clause_original
-        )
-        # Also handle table names without aliases
-        from_clause = re.sub(
-            r'(?i)\b(FROM|JOIN)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+(ON|WHERE|GROUP|ORDER|LIMIT|INNER|LEFT|RIGHT|FULL|$)',
-            rf'\1 \2 TABLESAMPLE SYSTEM ({percent:.4f} PERCENT) \3',
-            from_clause
         )
     elif source == "postgres":
         from_clause = re.sub(
-            r'(?i)\b(FROM|JOIN)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+([a-zA-Z_][a-zA-Z0-9_]*)',
-            rf'\1 \2 TABLESAMPLE SYSTEM ({percent:.4f}) \3',
+            r'(?i)\b(FROM|JOIN)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+',
+            rf'\1 \2 \3 TABLESAMPLE SYSTEM ({percent:.4f}) ',
             from_clause_original
-        )
-        from_clause = re.sub(
-            r'(?i)\b(FROM|JOIN)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+(ON|WHERE|GROUP|ORDER|LIMIT|INNER|LEFT|RIGHT|FULL|$)',
-            rf'\1 \2 TABLESAMPLE SYSTEM ({percent:.4f}) \3',
-            from_clause
         )
     else:  # MySQL - no TABLESAMPLE, will use WHERE RAND()
         from_clause = from_clause_original
