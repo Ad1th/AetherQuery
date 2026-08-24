@@ -3,9 +3,11 @@ Generate TPC-H benchmark data for testing approximate JOINs.
 Uses DuckDB's built-in TPC-H extension.
 """
 
-import sys
-sys.path.insert(0, 'backend')
-from db import duckdb as duckdb_db
+import os
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+from backend.db import duckdb as duckdb_db
 
 def generate_tpch_tables(scale_factor: float = 0.1):
     """

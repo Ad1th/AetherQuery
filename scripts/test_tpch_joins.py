@@ -7,13 +7,14 @@ import sys
 import time
 import os
 
-# Add backend to path
-backend_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'backend')
-sys.path.insert(0, backend_path)
+# Add project root to path
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
-from core.parser import parse_analytical_query
-from core.runtime_sampling import run_runtime_sampling
-from db import duckdb as duckdb_db
+from backend.core.parser import parse_analytical_query
+from backend.core.runtime_sampling import run_runtime_sampling
+from backend.db import duckdb as duckdb_db
 
 
 def run_exact_query(sql: str) -> dict:
