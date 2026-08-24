@@ -32,9 +32,9 @@ import time
 from typing import Any
 import pandas as pd
 
-from core.executor import _execute_source_query
-from core.parser import ParsedQuery
-from core.join_sampling import BloomFilter, HyperLogLog
+from backend.core.executor import _execute_source_query
+from backend.core.parser import ParsedQuery
+from backend.core.join_sampling import BloomFilter, HyperLogLog
 
 
 def extract_join_keys(parsed: ParsedQuery) -> list[tuple[str, str, str, str]]:

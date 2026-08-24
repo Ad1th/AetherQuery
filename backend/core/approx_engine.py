@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from core.executor import build_sample_query
-from core.parser import parse_analytical_query
-from core.runtime_sampling import MODE_CONFIGS, run_runtime_sampling
+from backend.core.executor import build_sample_query
+from backend.core.parser import parse_analytical_query
+from backend.core.runtime_sampling import MODE_CONFIGS, run_runtime_sampling
 
 
 def _rewrite_agg_query(query: str, source: str, mode: str = "balanced") -> str:

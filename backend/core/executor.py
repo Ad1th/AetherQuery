@@ -6,10 +6,10 @@ import time
 
 import pandas as pd
 
-from core.parser import ParsedQuery
-from db import duckdb as duckdb_db
-from db import mysql as mysql_db
-from db import postgres as postgres_db
+from backend.core.parser import ParsedQuery
+from backend.db import duckdb as duckdb_db
+from backend.db import mysql as mysql_db
+from backend.db import postgres as postgres_db
 
 
 def _sample_clause(source: str, sample_fraction: float) -> str:
