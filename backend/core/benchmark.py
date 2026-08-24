@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from core.exact_engine import run_exact
-from core.parser import ParsedQuery, parse_analytical_query
-from core.runtime_sampling import run_runtime_sampling
+from backend.core.exact_engine import run_exact
+from backend.core.parser import ParsedQuery, parse_analytical_query
+from backend.core.runtime_sampling import run_runtime_sampling
 
 
 def _normalize_exact_result(parsed: ParsedQuery, payload: dict[str, Any]) -> Any:

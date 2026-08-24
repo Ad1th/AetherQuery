@@ -40,8 +40,8 @@ from __future__ import annotations
 from typing import Any, List, Tuple
 from dataclasses import dataclass
 
-from core.parser import ParsedQuery, JoinSpec
-from core.join_sampling import HyperLogLog
+from backend.core.parser import ParsedQuery, JoinSpec
+from backend.core.join_sampling import HyperLogLog
 import pandas as pd
 
 

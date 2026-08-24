@@ -5,7 +5,7 @@ from typing import Any
 import duckdb
 import pandas as pd
 
-from core.parser import AggregateSpec, ParsedQuery
+from backend.core.parser import AggregateSpec, ParsedQuery
 
 
 def _render_group_columns(group_by: list[str]) -> str:
