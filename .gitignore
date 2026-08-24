@@ -86,4 +86,5 @@ datasets/*.csv
 
 # Coverage
 .coverage
-htmlcov/.claude/
+htmlcov/
+.claude/
