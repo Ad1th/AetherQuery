@@ -4,10 +4,10 @@ import math
 import time
 from typing import Any, Callable
 
-from core.executor import fetch_sample_frame, fetch_aggregated_sample
-from core.groupby_engine import aggregate_sample
-from core.parser import ParsedQuery
-from core.join_sampling import (
+from backend.core.executor import fetch_sample_frame, fetch_aggregated_sample
+from backend.core.groupby_engine import aggregate_sample
+from backend.core.parser import ParsedQuery
+from backend.core.join_sampling import (
     execute_stratified_join_sample,
     estimate_join_complexity_multiplier,
 )
@@ -89,12 +89,20 @@ def _derive_accuracy_config(mode: str, accuracy_target: float | None) -> dict[st
     return config
 
 
-def _safe_relative_error(previous: float | int | None, current: float | int | None) -> float:
+def _safe_relative_error(previous: Any, current: Any) -> float:
     if previous is None or current is None:
         return math.inf
-    if previous == 0:
-        return 0.0 if current == 0 else math.inf
-    return abs(float(current) - float(previous)) / abs(float(previous))
+    if isinstance(previous, (str, bool)) or isinstance(current, (str, bool)):
+        return 0.0 if previous == current else math.inf
+    try:
+        prev_f = float(previous)
+        curr_f = float(current)
+    except (ValueError, TypeError):
+        return 0.0 if previous == current else math.inf
+
+    if prev_f == 0:
+        return 0.0 if curr_f == 0 else math.inf
+    return abs(curr_f - prev_f) / abs(prev_f)
 
 
 def _max_convergence_delta(previous: Any, current: Any) -> float:

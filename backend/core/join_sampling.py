@@ -18,8 +18,8 @@ from typing import Any
 
 import pandas as pd
 
-from core.executor import _execute_source_query
-from core.parser import ParsedQuery, JoinSpec
+from backend.core.executor import _execute_source_query
+from backend.core.parser import ParsedQuery, JoinSpec
 
 
 class HyperLogLog:
@@ -139,7 +139,7 @@ def estimate_join_cardinality(
     right_sample_fraction: float,
 ) -> int:
     """
-    Estimate join result cardinality using HyperLogLog on sampled data.
+    Estimate join result cardinality using HyperLogLog and stratified sample merge.
 
     Args:
         left_sample: Sampled left table
@@ -152,6 +152,9 @@ def estimate_join_cardinality(
     Returns:
         Estimated number of rows in join result
     """
+    if left_sample.empty or right_sample.empty:
+        return 0
+
     # Build HyperLogLog sketches for join keys
     left_hll = HyperLogLog(precision=14)
     right_hll = HyperLogLog(precision=14)
@@ -162,27 +165,19 @@ def estimate_join_cardinality(
     for value in right_sample[right_key].dropna():
         right_hll.add(value)
 
-    # Estimate distinct keys in each table
-    left_distinct_estimate = left_hll.cardinality()
-    right_distinct_estimate = right_hll.cardinality()
-
-    # Estimate total rows in each table
-    left_total = len(left_sample) / max(0.001, left_sample_fraction)
-    right_total = len(right_sample) / max(0.001, right_sample_fraction)
-
-    # Estimate join selectivity using min(distinct_left, distinct_right)
-    # This assumes foreign key relationship
-    common_keys = min(left_distinct_estimate, right_distinct_estimate)
-
-    if common_keys == 0:
+    if left_hll.cardinality() == 0 or right_hll.cardinality() == 0:
         return 0
 
-    # Estimate average duplicates per key
-    left_duplication = left_total / max(1, left_distinct_estimate)
-    right_duplication = right_total / max(1, right_distinct_estimate)
-
-    # Join cardinality = common_keys * avg_left_duplicates * avg_right_duplicates
-    estimated_cardinality = int(common_keys * left_duplication * right_duplication)
+    # Compute sample join cardinality using key merge
+    merged_sample = pd.merge(
+        left_sample[[left_key]].dropna(),
+        right_sample[[right_key]].dropna(),
+        left_on=left_key,
+        right_on=right_key,
+    )
+    sample_join_rows = len(merged_sample)
+    denom = max(1e-6, left_sample_fraction * right_sample_fraction)
+    estimated_cardinality = int(round(sample_join_rows / denom))
 
     return estimated_cardinality
 
@@ -260,17 +255,19 @@ def build_stratified_join_query(
 
     if source == "duckdb":
         # DuckDB syntax: table_name alias TABLESAMPLE SYSTEM (x%)
-        # Pattern: table_name alias -> table_name alias TABLESAMPLE SYSTEM (x%)
+        # Inject TABLESAMPLE after the primary FROM table to preserve join selectivity
         from_clause = re.sub(
-            r'(?i)\b(FROM|JOIN)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+',
-            rf'\1 \2 \3 TABLESAMPLE SYSTEM ({percent:.4f} PERCENT) ',
-            from_clause_original
+            r'^\s*([a-zA-Z_][a-zA-Z0-9_]*)(?:\s+([a-zA-Z_][a-zA-Z0-9_]*))?',
+            lambda m: f"{m.group(1)} {m.group(2) or ''} TABLESAMPLE SYSTEM ({percent:.4f} PERCENT)",
+            from_clause_original,
+            count=1,
         )
     elif source == "postgres":
         from_clause = re.sub(
-            r'(?i)\b(FROM|JOIN)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+',
-            rf'\1 \2 \3 TABLESAMPLE SYSTEM ({percent:.4f}) ',
-            from_clause_original
+            r'^\s*([a-zA-Z_][a-zA-Z0-9_]*)(?:\s+([a-zA-Z_][a-zA-Z0-9_]*))?',
+            lambda m: f"{m.group(1)} {m.group(2) or ''} TABLESAMPLE SYSTEM ({percent:.4f})",
+            from_clause_original,
+            count=1,
         )
     else:  # MySQL - no TABLESAMPLE, will use WHERE RAND()
         from_clause = from_clause_original
@@ -345,7 +342,23 @@ def execute_stratified_join_sample(
 
         # Build result map keyed by group
         if parsed.group_by:
-            key = tuple(row_dict[column] for column in parsed.group_by)
+            # Extract values for group keys, handling table aliases
+            # GROUP BY may have "table.column" but result columns are just "column"
+            group_values = []
+            for group_col in parsed.group_by:
+                # Try with table alias first, then without
+                if group_col in row_dict:
+                    group_values.append(row_dict[group_col])
+                else:
+                    # Strip table alias (e.g., "c.c_mktsegment" → "c_mktsegment")
+                    col_without_alias = group_col.split('.')[-1] if '.' in group_col else group_col
+                    if col_without_alias in row_dict:
+                        group_values.append(row_dict[col_without_alias])
+                    else:
+                        # Try with full qualified name in columns
+                        group_values.append(None)
+
+            key = tuple(group_values)
             result_map[str(key)] = row_dict
         else:
             result_map[f"row_{index}"] = row_dict
