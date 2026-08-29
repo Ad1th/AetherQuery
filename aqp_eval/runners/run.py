@@ -10,6 +10,7 @@ from aqp_eval.policies import (
     GeometricPolicy,
     FixedLadderPolicy,
     OnlineAggPolicy,
+    StaticCIPolicy,
 )
 from aqp_eval.metrics.compare import compare_results
 
@@ -55,6 +56,7 @@ def run(database: str = DATABASE, out_path: str = OUTPUT, dataset_label: str = D
         GeometricPolicy(),
         FixedLadderPolicy(),
         OnlineAggPolicy(),
+        StaticCIPolicy(),
         AetherQueryPolicy(),
     ]
 
