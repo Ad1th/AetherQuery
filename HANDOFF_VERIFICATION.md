@@ -5,6 +5,13 @@
 full verification pass (tests, build, lint, benchmark regeneration) and assess
 readiness for (1) a patent filing and (2) a Q1 journal paper.
 
+> **Update (same day, second pass):** the two blocking gaps in §5 have been
+> addressed in code. Real confidence-interval stopping is now wired into the
+> engine (`backend/core/sufficient_stats.py`), and JOIN sample-rate selection
+> is now driven by HyperLogLog sketches, not a fixed table. See **§7** for what
+> changed and the new measured coverage numbers; §5 is kept as the original
+> assessment for context. Test count is now **207**.
+
 ---
 
 ## 1. Code implemented this pass
@@ -275,3 +282,128 @@ aqp_eval/results/sf10_smoke.json     regenerated on clean TPC-H SF10
 Clean `aqp_eval/datasets/tpch_sf{1,10}.duckdb` were generated locally and are
 git-ignored; regenerate with
 `python -c "import duckdb;c=duckdb.connect('aqp_eval/datasets/tpch_sf1.duckdb');c.execute('INSTALL tpch');c.execute('LOAD tpch');c.execute('CALL dbgen(sf=1)')"`.
+
+---
+
+## 7. Second pass — real confidence intervals + HLL-guided joins
+
+### 7.1 CI-based stopping for non-JOIN aggregates (`sufficient_stats.py`)
+
+`backend/core/sufficient_stats.py` (new) fetches, in **one pushed-down query per
+sample**, exactly the sufficient statistics `backend.stats` needs — per group:
+`COUNT(*)`, `COUNT(*) FILTER (pred)`, `SUM(x)`, `SUM(x*x)`, `SUM(x*x*x)`,
+`VAR_SAMP(x)`, `skewness(x)`, `MIN(x)`, `MAX(x)` — plus the relation's true row
+count (cached) so the **realized** fraction `n/N` is used, not the nominal
+`TABLESAMPLE` percentage.
+
+`runtime_sampling.run_runtime_sampling` now, for non-JOIN aggregate queries:
+
+* builds a Bonferroni-corrected `EstimateSet` over the whole result grid via
+  `backend.stats.estimate_query`;
+* stops when `EstimateSet.meets_target(ε)` — every cell's **relative CI
+  half-width** ≤ ε — with `stop_reason="ci_within_target"`;
+* takes ε from `accuracy_target` (`1 − target/100`) or the mode's error budget
+  (`balanced` → 4%);
+* grows the next sample in proportion to how far the widest interval still is
+  from ε;
+* reports the interval grid (`ci`), the realized `estimated_error`
+  (= widest relative half-width), and a genuine `confidence` (the coverage
+  level) instead of the old iteration-stability pseudo-confidence.
+
+The old delta-threshold `converged` rule and `single_pass` short-circuit are
+**bypassed** for these queries. JOINs are untouched (see §7.2).
+
+**Effect on the smoke queries (clean TPC-H SF10, `balanced`, aetherquery policy):**
+
+| Query | error before (delta stop) | error after (CI stop) | stop_reason | speedup |
+|---|---|---|---|---|
+| Q01 `COUNT(*)` | 6.52 % | **0.00 %** (recognised as census) | ci_within_target | ~1× |
+| Q02 `SUM` ungrouped | 5.24 % | **0.05 %** | ci_within_target | ~3× |
+| Q05 `COUNT` grouped | 5.23 % | **0.11 %** | ci_within_target | ~20× |
+| Q06 `SUM` grouped | 1.17 % | **0.57 %** | ci_within_target | ~11× |
+
+### 7.2 HyperLogLog-guided JOIN sample rate (`join_sampling.hll_guided_join_min_rate`)
+
+The fixed 5/7/10 %-by-join-count floor is now only a lower bound. On a JOIN
+query the engine:
+
+1. draws a 1 % probe of the primary table's equi-join key,
+2. feeds it to a `HyperLogLog(2^14)` sketch and scales the estimate to the full
+   table,
+3. estimates the output-group count the same way,
+4. solves for the sample fraction that yields ≈200 matched rows per group,
+   clamped to `[floor, 0.60]`.
+
+The chosen rate and its inputs are reported on the payload as
+`join_rate_selection` (`method: "hll_guided"` with `est_key_cardinality`,
+`est_groups`, `chosen_rate`; falls back to `method: "fixed_floor"` on any probe
+failure). This makes the "HLL-guided sample size selection" claim real code
+rather than aspiration — though `est_groups` is weak when the GROUP BY key is
+not on the primary table and should be improved (probe the dimension table).
+
+### 7.3 Measured coverage (`scripts/run_engine_coverage_study.py`, new)
+
+End-to-end study: run the engine N times per (query, target), compare the
+reported 95 % interval against the true answer. TPC-H SF1, 40 trials,
+`aqp_eval/results/engine_coverage_study.json`:
+
+| query | target | empirical coverage | true err p50 / p95 | speedup |
+|---|---|---|---|---|
+| count_star | any | 100 % | 0.00 / 0.00 | ~1× |
+| sum_ungrouped | 95 % | 97 % | 0.16 / 0.65 % | ~2× |
+| avg_grouped | 95 % | 100 % | 0.26 / 0.89 % | ~6× |
+| multi_agg | 95 % | 96 % | 0.50 / 1.75 % | ~6× |
+| sum_filtered | 95 % | 97 % | 0.62 / 2.3 % | ~3× |
+| **sum_grouped** | 95 % | **~88 %** | 0.6 / 2.1 % | ~5× |
+
+So: COUNT, AVG, filtered and multi-aggregate queries cover **at or near the
+nominal 95 %**. A plain grouped `SUM` of a heavy-tailed column still
+**under-covers at ~85–92 %** — the CLT interval is too tight for that skew and
+the finite-sample (empirical-Bernstein) path is not engaging aggressively
+enough for the expanded (zero-inflated) variable. This is now a *measured,
+visible* gap rather than a silent 5–20 % error.
+
+### 7.4 Revised readiness
+
+**Patent — ready for a strong provisional, and a non-provisional is now in
+reach.** The three "aspirational" objections in §5.1 are answered: CI-driven
+adaptive stopping, HLL-guided rate selection, and the group-completeness
+escalation rule are all implemented and exercised by tests. Remaining before a
+non-provisional: (a) tighten the HLL group-count probe, (b) decide whether to
+claim the JOIN estimator (still heuristic — see below), (c) a proper prior-art
+section positioning the *specific* mechanisms against BlinkDB / WanderJoin /
+online aggregation.
+
+**Q1 paper — a single-table AQP paper is now within a few weeks of
+submittable.** The engine produces validated intervals with measured coverage;
+the coverage study is the experimental backbone. To submit:
+
+1. Close the grouped-SUM coverage gap (force empirical-Bernstein on the
+   expanded variable when its skew is high; re-run the study to show ≥94 %).
+2. Sweep scale factors (SF1/10/100) and more query shapes; add convergence
+   curves and latency distributions (the study script already emits the raw
+   data).
+3. One real-world dataset (NYC taxi / Wikipedia clickstream).
+4. A real baseline (BlinkDB or WanderJoin), not just fixed-fraction ladders.
+5. Reproducibility artifact (Docker + the `dbgen` snippet + the study script).
+
+**JOINs still need their own theory for a full VLDB/SIGMOD submission.** The
+one-sided-sample-scaled-by-1/f estimator is biased for many join shapes and
+`backend.stats` deliberately excludes it. The completeness guard and HLL rate
+selection make joins *usable and honest* (labelled `groups_incomplete` when
+they are not AQP-suitable), but a join paper needs an unbiased estimator with a
+multiplicity-aware variance and a convergence result. That is genuine research,
+not an engineering task — scope the near-term paper to single-table AQP.
+
+### 7.5 Files added / changed in this pass
+
+```
+backend/core/sufficient_stats.py            new  - pushed-down sufficient stats + estimate_query wiring
+backend/core/runtime_sampling.py            CI-stop path for non-JOIN aggregates; HLL rate hook
+backend/core/join_sampling.py               hll_guided_join_min_rate + _join_key_columns
+scripts/run_engine_coverage_study.py        new  - end-to-end coverage / error / speedup study
+backend/tests/test_ci_stop.py               new  (5)
+backend/tests/test_hll_join_rate.py         new  (5)
+aqp_eval/results/sf{1,10}_smoke.json        regenerated with CI stopping
+aqp_eval/results/engine_coverage_study*.json  new  - coverage study output
+```
