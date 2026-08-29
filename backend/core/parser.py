@@ -241,10 +241,14 @@ def _parse_joins(query_from_onwards: str, base_table: str) -> tuple[list[JoinSpe
 def parse_analytical_query(query: str) -> ParsedQuery:
     normalized = query.strip().rstrip(";")
 
-    # Enhanced pattern to capture table name with optional alias
+    # Enhanced pattern to capture table name with optional alias.
+    # The alias must not swallow a trailing clause keyword: "FROM lineitem GROUP
+    # BY ..." has no alias, and matching "GROUP" as one strands "BY ..." and
+    # breaks clause parsing.
     match = re.match(
         r"(?is)^select\s+(?P<select>.+?)\s+from\s+(?P<table>[a-zA-Z_][a-zA-Z0-9_]*)"
-        r"(?:\s+(?P<alias>[a-zA-Z_][a-zA-Z0-9_]*))?"
+        r"(?:\s+(?!(?:where|group|order|limit|having|join|inner|left|right|full|cross|natural|union|on)\b)"
+        r"(?P<alias>[a-zA-Z_][a-zA-Z0-9_]*))?"
         r"(?P<remainder>.*?)$",
         normalized,
     )
