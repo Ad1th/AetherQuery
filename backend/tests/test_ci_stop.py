@@ -55,6 +55,60 @@ def test_ungrouped_count_is_reported_exact(monkeypatch):
     assert list(detail["result_map"].values())[0]["cnt"] == pytest.approx(6_000_000)
 
 
+def test_group_columns_are_aliased_so_qualified_keys_survive():
+    parsed = parse_analytical_query(
+        "SELECT c.c_mktsegment, COUNT(*) AS c FROM customer c "
+        "JOIN orders o ON c.c_custkey = o.o_custkey GROUP BY c.c_mktsegment"
+    )
+    sql = ss.build_sufficient_stats_sql(parsed, "duckdb", 0.05)
+    # the qualified group expr must be re-aliased, not selected bare
+    assert "c.c_mktsegment AS __aqp_grp_0" in sql
+    assert "TABLESAMPLE SYSTEM" in sql.split("JOIN")[0]  # sample on the primary only
+
+
+def test_join_ci_is_defensible_gate():
+    inner = parse_analytical_query(
+        "SELECT n.n_name, COUNT(*) AS c FROM lineitem l "
+        "JOIN nation n ON l.l_suppkey = n.n_nationkey GROUP BY n.n_name"
+    )
+    left = parse_analytical_query(
+        "SELECT n.n_name, COUNT(*) AS c FROM lineitem l "
+        "LEFT JOIN nation n ON l.l_suppkey = n.n_nationkey GROUP BY n.n_name"
+    )
+    plain = parse_analytical_query("SELECT COUNT(*) AS c FROM lineitem")
+    assert ss.join_ci_is_defensible(inner) is True
+    assert ss.join_ci_is_defensible(left) is False
+    assert ss.join_ci_is_defensible(plain) is False
+
+
+def test_design_effect_widens_sum_intervals_but_not_count(monkeypatch):
+    parsed = parse_analytical_query(
+        "SELECT l_returnflag, COUNT(*) AS c, SUM(l_extendedprice) AS s "
+        "FROM lineitem GROUP BY l_returnflag"
+    )
+    ss._POPULATION_CACHE.clear()
+    payload = {
+        "columns": [
+            "__aqp_grp_0", "__aqp_n_bucket", "__aqp_n_domain",
+            "__aqp_sum__s", "__aqp_sumxx__s", "__aqp_sumxxx__s",
+            "__aqp_var__s", "__aqp_min__s", "__aqp_max__s", "__aqp_skew__s",
+        ],
+        "rows": [["A", 50_000, 50_000, 1.5e9, 5.0e13, 2e18, 4.0e8, 900.0, 100000.0, 0.4]],
+    }
+    monkeypatch.setattr(ss, "_execute_source_query", _stub_exec({
+        "COUNT(*) FROM lineitem": {"columns": ["c"], "rows": [[6_000_000]]},
+        "TABLESAMPLE": payload,
+    }))
+
+    _, _, d_no = ss.evaluate_sample_accuracy(parsed, "duckdb", 0.01, design_effect=1.0)
+    _, _, d_deff = ss.evaluate_sample_accuracy(parsed, "duckdb", 0.01, design_effect=1.5)
+
+    by_no = {e["alias"]: e for e in d_no["ci"]["estimates"]}
+    by_deff = {e["alias"]: e for e in d_deff["ci"]["estimates"]}
+    assert by_deff["s"]["half_width"] > by_no["s"]["half_width"]
+    assert by_deff["c"]["half_width"] == pytest.approx(by_no["c"]["half_width"])
+
+
 def test_grouped_sum_interval_tightens_with_fraction(monkeypatch):
     parsed = parse_analytical_query(
         "SELECT l_returnflag, SUM(l_extendedprice) AS s FROM lineitem GROUP BY l_returnflag"

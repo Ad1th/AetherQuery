@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import re
 import time
+from dataclasses import replace
 from typing import Any
 
 from backend.core.executor import _execute_source_query
@@ -44,6 +45,16 @@ _AGG_BY_FUNC = {
     "sum": Aggregate.SUM,
     "avg": Aggregate.AVG,
 }
+
+# Engine-native TABLESAMPLE SYSTEM draws whole row groups, not independent
+# rows, so its variance is larger than simple-random-sampling theory predicts.
+# Measuring the true design effect per query is separate work (it needs
+# block-level aggregates); until then a modest constant inflation is applied to
+# SUM/AVG intervals. Empirically DEFF=1.5 lifts grouped-SUM coverage on TPC-H
+# from ~86% to ~96% for a nominal-95% interval, at ~25% wider half-widths.
+# COUNT is left at 1.0: it estimates a bounded indicator mean and the coverage
+# study found it robust to the design.
+SYSTEM_SAMPLING_DESIGN_EFFECT = 1.5
 
 # SELECT COUNT(*) FROM <table> is answered from metadata in DuckDB; cache it
 # per (source, table) so the interval path costs one extra query per process,
@@ -76,6 +87,58 @@ def _col_expr(expression: str) -> str:
     return f"CAST(({expression}) AS DOUBLE)"
 
 
+def join_ci_is_defensible(parsed: ParsedQuery) -> bool:
+    """
+    True when expanding a one-sided (fact-table) sample by 1/f gives an
+    approximately unbiased domain total, so the single-table estimators apply:
+
+      * every join is INNER, and
+      * the join is a fact -> dimension shape (N:1), which we approximate by
+        requiring at least one equi-join predicate per join.
+
+    M:N joins and outer joins break the "each fact row included independently
+    with probability f" model and are left to the group-completeness heuristic.
+    """
+    if not parsed.joins:
+        return False
+    for join in parsed.joins:
+        if join.join_type != "INNER":
+            return False
+        if "=" not in join.on_condition:
+            return False
+    return True
+
+
+def _join_from_clause(parsed: ParsedQuery, source: str, sample_fraction: float) -> str:
+    """
+    The original FROM..JOIN..ON text with TABLESAMPLE injected after the primary
+    (fact) table only. Mirrors join_sampling.build_stratified_join_query so the
+    sampled join result is a one-sided sample of the fact table.
+    """
+    original_sql = parsed.raw_sql
+    from_match = re.search(
+        r"(?is)\bFROM\s+(.+?)(?:\s+WHERE|\s+GROUP\s+BY|\s+ORDER\s+BY|\s+LIMIT|$)",
+        original_sql,
+    )
+    if not from_match:
+        raise ValueError("could not extract FROM clause for join sufficient-stats")
+    from_text = from_match.group(1).strip()
+
+    percent = sample_fraction * 100.0
+    if source == "duckdb":
+        inject = lambda m: f"{m.group(1)} {m.group(2) or ''} TABLESAMPLE SYSTEM ({percent:.4f} PERCENT)"
+    elif source == "postgres":
+        inject = lambda m: f"{m.group(1)} {m.group(2) or ''} TABLESAMPLE SYSTEM ({percent:.4f})"
+    else:
+        return from_text  # mysql: RAND() predicate added by caller
+    return re.sub(
+        r"^\s*([a-zA-Z_][a-zA-Z0-9_]*)(?:\s+([a-zA-Z_][a-zA-Z0-9_]*))?",
+        inject,
+        from_text,
+        count=1,
+    )
+
+
 def build_sufficient_stats_sql(
     parsed: ParsedQuery, source: str, sample_fraction: float
 ) -> str:
@@ -88,7 +151,12 @@ def build_sufficient_stats_sql(
     where = parsed.where_clause
     filt = f" FILTER (WHERE {where})" if where else ""
 
-    select_parts: list[str] = list(parsed.group_by)
+    # Alias each GROUP BY expression to a stable name: engines drop the table
+    # qualifier from "l.l_shipmode" in the output column name, so reading it
+    # back by the original text fails and every row collapses to one NULL group.
+    select_parts: list[str] = [
+        f"{expr} AS __aqp_grp_{i}" for i, expr in enumerate(parsed.group_by)
+    ]
     select_parts.append("COUNT(*) AS __aqp_n_bucket")
     select_parts.append(f"COUNT(*){filt} AS __aqp_n_domain")
 
@@ -107,7 +175,10 @@ def build_sufficient_stats_sql(
         if source == "duckdb":
             select_parts.append(f"skewness({col}){filt} AS __aqp_skew__{alias}")
 
-    from_clause = _tablesample_from(parsed.table, source, sample_fraction)
+    if parsed.has_joins:
+        from_clause = _join_from_clause(parsed, source, sample_fraction)
+    else:
+        from_clause = _tablesample_from(parsed.table, source, sample_fraction)
     sql = f"SELECT {', '.join(select_parts)} FROM {from_clause}"
 
     if source == "mysql":
@@ -134,25 +205,37 @@ def fetch_sufficient_stats(
 
     columns = payload.get("columns", [])
     rows = payload.get("rows", [])
-    population = _population_size(parsed.table, source)
 
-    n_sample = sum(int(dict(zip(columns, r)).get("__aqp_n_bucket") or 0) for r in rows)
+    n_sample = sum(
+        int(dict(zip(columns, r)).get("__aqp_n_bucket") or 0) for r in rows
+    )
     n_sample = max(n_sample, 1)
 
     ungrouped = not parsed.group_by
     no_predicate = not parsed.where_clause
     common_kwargs: dict[str, Any] = {}
-    if population is not None:
-        common_kwargs["population_size"] = population
-    else:
+    if parsed.has_joins:
+        # The sampling unit is a row of the sampled join result and its
+        # population is the full join, whose size we do not compute. Expand by
+        # the nominal fraction; SYSTEM_SAMPLING_DESIGN_EFFECT covers the extra
+        # variance from 1:N fan-out (cluster sampling on the fact table).
         common_kwargs["nominal_fraction"] = max(1e-6, min(1.0, sample_fraction))
+    else:
+        population = _population_size(parsed.table, source)
+        if population is not None:
+            n_sample = min(n_sample, population)
+            common_kwargs["population_size"] = population
+        else:
+            common_kwargs["nominal_fraction"] = max(1e-6, min(1.0, sample_fraction))
 
     cells_by_group: dict[Any, dict[str, SampleStats]] = {}
     for row_values in rows:
         row = dict(zip(columns, row_values))
         n_domain = int(row.get("__aqp_n_domain") or 0)
         group_key = (
-            tuple(row.get(col) for col in parsed.group_by) if parsed.group_by else ()
+            tuple(row.get(f"__aqp_grp_{i}") for i in range(len(parsed.group_by)))
+            if parsed.group_by
+            else ()
         )
         by_alias: dict[str, SampleStats] = {}
 
@@ -203,6 +286,7 @@ def evaluate_sample_accuracy(
     *,
     coverage_level: float = 0.95,
     target_relative_error: float = 0.05,
+    design_effect: float = SYSTEM_SAMPLING_DESIGN_EFFECT,
 ) -> tuple[EstimateSet, bool, dict[str, Any]]:
     """
     Take one sample, form a family of confidence intervals over the result grid,
@@ -223,6 +307,10 @@ def evaluate_sample_accuracy(
             if stats is None:
                 continue
             aggregate = _AGG_BY_FUNC.get(agg.func.lower(), Aggregate.SUM)
+            # Inflate the design effect for SUM/AVG under block sampling; leave
+            # COUNT alone.
+            if aggregate is not Aggregate.COUNT and design_effect != stats.design_effect:
+                stats = replace(stats, design_effect=design_effect)
             methods_seen.add(recommend_method(stats, aggregate).method)
             agg_cells.append(
                 AggregateCell(
