@@ -497,41 +497,66 @@ def evaluate_join_sample_accuracy(
 
     ngrp = len(parsed.group_by)
 
-    # blocks[group_key][alias] -> list[BlockAggregate]
-    blocks: dict[tuple, dict[str, list[BlockAggregate]]] = {}
+    # Per (block, group): the raw rows. A group that is absent from a sampled
+    # block contributes a genuine zero in that block, and those zeros MUST be
+    # included in the between-block variance -- otherwise a sparse group's
+    # block_fraction is computed only over the blocks it happened to land in,
+    # which over-states the sampling rate and inflates its estimate.
+    per_block_group: dict[Any, dict[tuple, dict[str, float]]] = {}
+    sampled_block_ids: set[Any] = set()
     n_sample = 0
     for row in raw:
+        blk = row.get("__aqp_blk")
+        sampled_block_ids.add(blk)
         n_sample += int(row.get("__aqp_n_rows") or 0)
         gk = tuple(row.get(f"__aqp_grp_{i}") for i in range(ngrp))
-        n_dom = int(row.get("__aqp_n_domain") or 0)
-        per_alias = blocks.setdefault(gk, {})
+        rec = per_block_group.setdefault(blk, {}).setdefault(
+            gk, {"n_rows": 0, "n_domain": 0}
+        )
+        rec["n_rows"] += int(row.get("__aqp_n_rows") or 0)
+        rec["n_domain"] += int(row.get("__aqp_n_domain") or 0)
         for agg in parsed.aggregates:
-            sx = 0.0 if agg.is_count_star else float(row.get(f"__aqp_sum__{agg.alias}") or 0.0)
-            sxx = 0.0 if agg.is_count_star else float(row.get(f"__aqp_sumxx__{agg.alias}") or 0.0)
-            per_alias.setdefault(agg.alias, []).append(
-                BlockAggregate(
-                    block_id=row.get("__aqp_blk"),
-                    n_rows=int(row.get("__aqp_n_rows") or 0),
-                    n_domain=n_dom,
-                    sum_x=sx,
-                    sum_xx=sxx,
-                )
+            if agg.is_count_star:
+                continue
+            rec[f"sum_{agg.alias}"] = rec.get(f"sum_{agg.alias}", 0.0) + float(
+                row.get(f"__aqp_sum__{agg.alias}") or 0.0
+            )
+            rec[f"sumxx_{agg.alias}"] = rec.get(f"sumxx_{agg.alias}", 0.0) + float(
+                row.get(f"__aqp_sumxx__{agg.alias}") or 0.0
             )
     n_sample = max(n_sample, 1)
+    all_blocks_sampled = max(1, len(sampled_block_ids))
+    group_keys = {gk for bg in per_block_group.values() for gk in bg}
 
-    # The "population" for these clusters is the full joined result, not the
-    # fact table (1:N fan-out makes the join larger). Estimate its size by
-    # expanding the sampled joined rows by the block-sampling fraction.
-    all_blocks_sampled = len(
-        {b.block_id for pa in blocks.values() for lst in pa.values() for b in lst}
-    )
     block_fraction = max(1e-9, all_blocks_sampled / total_blocks)
     join_size_est = max(n_sample, round(n_sample / block_fraction))
 
-    num_intervals = max(1, len(blocks) * max(1, len(parsed.aggregates)))
+    num_intervals = max(1, len(group_keys) * max(1, len(parsed.aggregates)))
     per_interval = adjust_coverage_level(
         coverage_level, num_intervals, Correction.BONFERRONI
     )
+
+    # blocks[group_key][alias] -> BlockAggregate for EVERY sampled block (zeros
+    # where the group is absent), so blocks_sampled is the same for every group.
+    blocks: dict[tuple, dict[str, list[BlockAggregate]]] = {}
+    for gk in group_keys:
+        for agg in parsed.aggregates:
+            lst: list[BlockAggregate] = []
+            for blk in sampled_block_ids:
+                rec = per_block_group.get(blk, {}).get(gk)
+                if rec is None:
+                    lst.append(BlockAggregate(block_id=blk, n_rows=0, n_domain=0))
+                elif agg.is_count_star:
+                    lst.append(BlockAggregate(
+                        block_id=blk, n_rows=rec["n_rows"], n_domain=rec["n_domain"],
+                    ))
+                else:
+                    lst.append(BlockAggregate(
+                        block_id=blk, n_rows=rec["n_rows"], n_domain=rec["n_domain"],
+                        sum_x=rec.get(f"sum_{agg.alias}", 0.0),
+                        sum_xx=rec.get(f"sumxx_{agg.alias}", 0.0),
+                    ))
+            blocks.setdefault(gk, {})[agg.alias] = lst
 
     estimates: dict[Any, dict[str, Any]] = {}
     for gk, per_alias in blocks.items():
@@ -561,6 +586,12 @@ def evaluate_join_sample_accuracy(
         ),
     )
     met = estimate_set.meets_target(target_relative_error)
+    # The between-block variance is itself only well determined with enough
+    # blocks. Below ~20 sampled fact row groups the interval can look tight by
+    # luck, so refuse to stop and let the controller escalate.
+    MIN_BLOCKS_TO_STOP = 20
+    if met and all_blocks_sampled < min(MIN_BLOCKS_TO_STOP, total_blocks):
+        met = False
 
     columns = list(parsed.group_by) + [a.alias for a in parsed.aggregates]
     result_map: dict[str, Any] = {}
@@ -581,7 +612,7 @@ def evaluate_join_sample_accuracy(
         "rows": rows,
         "result_map": result_map,
         "n_sample": n_sample,
-        "blocks_sampled": len({b.block_id for pa in blocks.values() for lst in pa.values() for b in lst}),
+        "blocks_sampled": all_blocks_sampled,
         "sample_query": sql,
         "query_time": query_time,
         "max_relative_half_width": estimate_set.max_relative_half_width,
