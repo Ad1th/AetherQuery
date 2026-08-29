@@ -54,7 +54,6 @@ class JoinSpec:
     join_type: str  # INNER, LEFT, RIGHT, FULL
     right_table: str
     on_condition: str
-    right_alias: str | None = None
 
 
 @dataclass(frozen=True)
@@ -64,7 +63,6 @@ class ParsedQuery:
     select_items: list[str]
     aggregates: list[AggregateSpec]
     group_by: list[str]
-    table_alias: str | None = None
     where_clause: str | None = None
     order_by: list[OrderBySpec] | None = None
     limit: int | None = None
@@ -232,7 +230,6 @@ def _parse_joins(query_from_onwards: str, base_table: str) -> tuple[list[JoinSpe
             join_type=join_type,
             right_table=right_table,
             on_condition=on_condition,
-            right_alias=match.group(3).strip() if match.group(3) else None,
         ))
 
     # Remove all JOIN clauses from remaining query
@@ -247,7 +244,7 @@ def parse_analytical_query(query: str) -> ParsedQuery:
     # Enhanced pattern to capture table name with optional alias
     match = re.match(
         r"(?is)^select\s+(?P<select>.+?)\s+from\s+(?P<table>[a-zA-Z_][a-zA-Z0-9_]*)"
-        r"(?:\s+(?P<alias>(?!where\b|group\b|order\b|limit\b|inner\b|left\b|right\b|full\b|join\b)[a-zA-Z_][a-zA-Z0-9_]*))?"
+        r"(?:\s+(?P<alias>[a-zA-Z_][a-zA-Z0-9_]*))?"
         r"(?P<remainder>.*?)$",
         normalized,
     )
@@ -298,7 +295,6 @@ def parse_analytical_query(query: str) -> ParsedQuery:
     parsed = ParsedQuery(
         raw_sql=normalized,
         table=base_table,
-        table_alias=match.group("alias"),
         select_items=select_items,
         aggregates=aggregates,
         group_by=group_by,
@@ -310,7 +306,6 @@ def parse_analytical_query(query: str) -> ParsedQuery:
     return ParsedQuery(
         raw_sql=parsed.raw_sql,
         table=parsed.table,
-        table_alias=parsed.table_alias,
         select_items=parsed.select_items,
         aggregates=parsed.aggregates,
         group_by=parsed.group_by,
