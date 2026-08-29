@@ -450,18 +450,30 @@ def hll_guided_join_min_rate(
         sampled_distinct = key_hll.cardinality()
         est_key_cardinality = max(1, int(sampled_distinct / 0.01))
 
+        # Estimate the output group count. The GROUP BY key often lives on a
+        # dimension table, not the primary, so try every table in the query
+        # and take the first that resolves the (unqualified) column.
         n_groups = 1
+        group_table = None
         if parsed.group_by:
-            group_expr = parsed.group_by[0].split(".")[-1]
-            try:
-                grp_payload = _execute_source_query(
-                    f"SELECT approx_count_distinct({group_expr}) FROM {primary} "
-                    f"TABLESAMPLE SYSTEM (1 PERCENT)",
-                    source,
+            group_col = parsed.group_by[0].split(".")[-1]
+            candidate_tables = [primary] + [j.right_table for j in (parsed.joins or [])]
+            for tbl in candidate_tables:
+                # Sample the fact table (it is large); count dimensions exactly
+                # (they are small and 1% of them is noise).
+                probe = (
+                    f"SELECT approx_count_distinct({group_col}) FROM {tbl} "
+                    f"TABLESAMPLE SYSTEM (1 PERCENT)"
+                    if tbl == primary
+                    else f"SELECT COUNT(DISTINCT {group_col}) FROM {tbl}"
                 )
-                n_groups = max(1, int(grp_payload["rows"][0][0] or 1))
-            except Exception:
-                n_groups = 1
+                try:
+                    grp_payload = _execute_source_query(probe, source)
+                    n_groups = max(1, int(grp_payload["rows"][0][0] or 1))
+                    group_table = tbl
+                    break
+                except Exception:
+                    continue
 
         n_primary_payload = _execute_source_query(
             f"SELECT COUNT(*) FROM {primary}", source
@@ -477,6 +489,7 @@ def hll_guided_join_min_rate(
             "primary_key": primary_key,
             "est_key_cardinality": est_key_cardinality,
             "est_groups": n_groups,
+            "group_table": group_table,
             "n_primary": n_primary,
             "chosen_rate": round(rate, 4),
             "floor": floor,
