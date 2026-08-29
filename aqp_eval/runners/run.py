@@ -1,3 +1,4 @@
+import argparse
 import json
 import time
 from pathlib import Path
@@ -15,6 +16,7 @@ from aqp_eval.metrics.compare import compare_results
 
 DATABASE = "aqp_eval/datasets/tpch_sf10.duckdb"
 OUTPUT = "aqp_eval/results/sf10_smoke.json"
+DATASET_LABEL = "tpch_sf10"
 
 QUERIES = {
     "Q01": "SELECT COUNT(*) AS cnt FROM lineitem",
@@ -46,7 +48,7 @@ QUERIES = {
 }
 
 
-def run():
+def run(database: str = DATABASE, out_path: str = OUTPUT, dataset_label: str = DATASET_LABEL):
     policies = [
         ExactPolicy(),
         FixedFractionPolicy(fraction=0.05),
@@ -64,7 +66,7 @@ def run():
 
         exact = None
         try:
-            exact = ExactPolicy().run(query, DATABASE, seed=42)
+            exact = ExactPolicy().run(query, database, seed=42)
         except Exception as exc:
             print(f"Exact baseline failed: {type(exc).__name__}: {exc}")
 
@@ -78,7 +80,7 @@ def run():
             try:
                 output = policy.run(
                     query,
-                    DATABASE,
+                    database,
                     target=0.05,
                     seed=42,
                 )
@@ -107,7 +109,7 @@ def run():
                 )
 
             record = {
-                "dataset": "tpch_sf10",
+                "dataset": dataset_label,
                 "engine": "duckdb",
                 "query": query_id,
                 "policy": policy.name,
@@ -136,7 +138,7 @@ def run():
                     f"  error={error * 100:.4f}%"
                 )
 
-    output_path = Path(OUTPUT)
+    output_path = Path(out_path)
     output_path.parent.mkdir(
         parents=True,
         exist_ok=True,
@@ -148,9 +150,14 @@ def run():
     )
 
     print(
-        f"\nResults written to: {OUTPUT}"
+        f"\nResults written to: {out_path}"
     )
 
 
 if __name__ == "__main__":
-    run()
+    parser = argparse.ArgumentParser(description="AQP policy smoke harness")
+    parser.add_argument("--database", default=DATABASE)
+    parser.add_argument("--output", default=OUTPUT)
+    parser.add_argument("--dataset-label", default=DATASET_LABEL)
+    args = parser.parse_args()
+    run(args.database, args.output, args.dataset_label)
