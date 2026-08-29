@@ -380,24 +380,45 @@ def run_runtime_sampling(
             frame_length = 1
         elif use_ci_stop:
             _evaluator = evaluate_join_sample_accuracy if ci_join else evaluate_sample_accuracy
-            _estimate_set, ci_met, ci_detail = _evaluator(
-                parsed,
-                source,
-                sample_fraction,
-                coverage_level=0.95,
-                target_relative_error=ci_target_error,
-            )
-            aggregate_payload = {
-                "columns": ci_detail["columns"],
-                "rows": ci_detail["rows"],
-                "result_map": ci_detail["result_map"],
-            }
-            query_time = ci_detail["query_time"]
-            sample_query = ci_detail["sample_query"]
-            rows_sampled = ci_detail["n_sample"]
-            frame_length = 1
-            ci_max_rel_hw = ci_detail["max_relative_half_width"]
-            last_ci_block = ci_detail["ci"]
+            try:
+                _estimate_set, ci_met, ci_detail = _evaluator(
+                    parsed,
+                    source,
+                    sample_fraction,
+                    coverage_level=0.95,
+                    target_relative_error=ci_target_error,
+                )
+            except Exception:
+                # Never let the interval layer fail the query: fall back to the
+                # pushed-down sampled aggregate (join-aware) for this iteration
+                # and let the progression / time budget carry the stop decision.
+                was_join = ci_join
+                use_ci_stop = False
+                ci_join = False
+                if was_join:
+                    aggregate_payload, query_time, sample_query = execute_stratified_join_sample(
+                        parsed, source, sample_fraction
+                    )
+                else:
+                    aggregate_payload, query_time, sample_query = fetch_aggregated_sample(
+                        parsed, source, sample_fraction
+                    )
+                rows_sampled = None
+                frame_length = 1
+                ci_met = False
+                ci_max_rel_hw = None
+            else:
+                aggregate_payload = {
+                    "columns": ci_detail["columns"],
+                    "rows": ci_detail["rows"],
+                    "result_map": ci_detail["result_map"],
+                }
+                query_time = ci_detail["query_time"]
+                sample_query = ci_detail["sample_query"]
+                rows_sampled = ci_detail["n_sample"]
+                frame_length = 1
+                ci_max_rel_hw = ci_detail["max_relative_half_width"]
+                last_ci_block = ci_detail["ci"]
         elif getattr(parsed, "aggregates", None):
             aggregate_payload, query_time, sample_query = fetch_aggregated_sample(
                 parsed,

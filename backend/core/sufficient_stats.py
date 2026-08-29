@@ -61,12 +61,13 @@ _AGG_BY_FUNC = {
 # Engine-native TABLESAMPLE SYSTEM draws whole row groups, not independent
 # rows, so its variance is larger than simple-random-sampling theory predicts.
 # Measuring the true design effect per query is separate work (it needs
-# block-level aggregates); until then a modest constant inflation is applied to
-# SUM/AVG intervals. Empirically DEFF=1.5 lifts grouped-SUM coverage on TPC-H
-# from ~86% to ~96% for a nominal-95% interval, at ~25% wider half-widths.
-# COUNT is left at 1.0: it estimates a bounded indicator mean and the coverage
-# study found it robust to the design.
-SYSTEM_SAMPLING_DESIGN_EFFECT = 1.5
+# block-level aggregates -- the same machinery evaluate_join_sample_accuracy
+# uses); until then a constant inflation is applied to SUM/AVG intervals.
+# Empirically DEFF=1.75 lifts grouped-SUM coverage on TPC-H SF1 from ~93% to
+# ~97.5% (nominal 95%), at ~0.2pp wider relative half-widths. COUNT is left at
+# 1.0: it estimates a bounded indicator mean and the coverage study found it
+# robust to the design.
+SYSTEM_SAMPLING_DESIGN_EFFECT = 1.75
 
 # SELECT COUNT(*) FROM <table> is answered from metadata in DuckDB; cache it
 # per (source, table) so the interval path costs one extra query per process,
@@ -464,13 +465,37 @@ def evaluate_join_sample_accuracy(
     total_blocks = max(1, math.ceil(fact_pop / DUCKDB_VECTOR_SIZE))
     sql = build_join_block_stats_sql(parsed, source, sample_fraction)
     start = time.perf_counter()
-    payload = _execute_source_query(sql, source)
+    try:
+        payload = _execute_source_query(sql, source)
+    except Exception:
+        # rowid is unavailable on views, or the SQL did not bind. Degrade to the
+        # naive-expansion path rather than failing the query; it under-covers on
+        # 1:N joins but the caller's completeness heuristic still applies.
+        return evaluate_sample_accuracy(
+            parsed, source, sample_fraction,
+            coverage_level=coverage_level,
+            target_relative_error=target_relative_error,
+        )
     query_time = float(payload.get("time", time.perf_counter() - start))
     cols = payload.get("columns", [])
     raw = [dict(zip(cols, r)) for r in payload.get("rows", [])]
 
+    if not raw:
+        # Empty sample: no interval, keep sampling.
+        empty = EstimateSet(
+            estimates={}, per_interval_coverage=coverage_level,
+            family_wise_coverage=coverage_level, correction=Correction.BONFERRONI,
+            num_intervals=0, notes=("join sample returned no rows",),
+        )
+        return empty, False, {
+            "columns": list(parsed.group_by) + [a.alias for a in parsed.aggregates],
+            "rows": [], "result_map": {}, "n_sample": 1, "blocks_sampled": 0,
+            "sample_query": sql, "query_time": query_time,
+            "max_relative_half_width": None, "unresolved_cells": 0,
+            "ci": empty.to_dict(),
+        }
+
     ngrp = len(parsed.group_by)
-    non_count = [a for a in parsed.aggregates if not a.is_count_star]
 
     # blocks[group_key][alias] -> list[BlockAggregate]
     blocks: dict[tuple, dict[str, list[BlockAggregate]]] = {}

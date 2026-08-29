@@ -109,6 +109,72 @@ def test_design_effect_widens_sum_intervals_but_not_count(monkeypatch):
     assert by_deff["c"]["half_width"] == pytest.approx(by_no["c"]["half_width"])
 
 
+def test_evaluate_sample_accuracy_handles_empty_sample(monkeypatch):
+    parsed = parse_analytical_query(
+        "SELECT l_returnflag, SUM(l_extendedprice) AS s FROM lineitem GROUP BY l_returnflag"
+    )
+    ss._POPULATION_CACHE.clear()
+    monkeypatch.setattr(ss, "_execute_source_query", _stub_exec({
+        "COUNT(*) FROM lineitem": {"columns": ["c"], "rows": [[6_000_000]]},
+        "TABLESAMPLE": {"columns": [
+            "__aqp_grp_0", "__aqp_n_bucket", "__aqp_n_domain",
+            "__aqp_sum__s", "__aqp_sumxx__s", "__aqp_sumxxx__s",
+            "__aqp_var__s", "__aqp_min__s", "__aqp_max__s", "__aqp_skew__s",
+        ], "rows": []},
+    }))
+    es, met, detail = ss.evaluate_sample_accuracy(parsed, "duckdb", 0.001)
+    assert met is False
+    assert detail["rows"] == []
+    assert detail["max_relative_half_width"] is None
+
+
+def test_join_ci_falls_back_when_block_query_fails(monkeypatch):
+    parsed = parse_analytical_query(
+        "SELECT c.c_mktsegment, COUNT(*) AS c FROM customer c "
+        "JOIN orders o ON c.c_custkey = o.o_custkey GROUP BY c.c_mktsegment"
+    )
+    ss._POPULATION_CACHE.clear()
+    calls = {"n": 0}
+
+    def _exec(sql, source):
+        if "COUNT(*) FROM customer" in sql and "rowid" not in sql:
+            return {"columns": ["n"], "rows": [[150_000]]}
+        if "rowid" in sql:
+            raise RuntimeError("Binder Error: rowid not available on this table")
+        # the naive fallback path (build_sufficient_stats_sql join branch)
+        calls["n"] += 1
+        return {"columns": [
+            "c.c_mktsegment", "__aqp_grp_0", "__aqp_n_bucket", "__aqp_n_domain",
+        ], "rows": [["BUILDING", "BUILDING", 5000, 5000],
+                    ["AUTOMOBILE", "AUTOMOBILE", 4000, 4000]]}
+
+    monkeypatch.setattr(ss, "_execute_source_query", _exec)
+    es, met, detail = ss.evaluate_join_sample_accuracy(parsed, "duckdb", 0.05)
+    # did not raise; produced a (naive) estimate grid instead
+    assert calls["n"] >= 1
+    assert set(detail["result_map"]) != set()
+
+
+def test_non_duckdb_join_ci_delegates_to_single_table_path(monkeypatch):
+    parsed = parse_analytical_query(
+        "SELECT c.c_mktsegment, COUNT(*) AS c FROM customer c "
+        "JOIN orders o ON c.c_custkey = o.o_custkey GROUP BY c.c_mktsegment"
+    )
+    ss._POPULATION_CACHE.clear()
+
+    def _exec(sql, source):
+        assert "rowid" not in sql, "postgres path must not reference rowid"
+        if "COUNT(*) FROM customer" in sql:
+            return {"columns": ["n"], "rows": [[150_000]]}
+        return {"columns": [
+            "c.c_mktsegment", "__aqp_grp_0", "__aqp_n_bucket", "__aqp_n_domain",
+        ], "rows": [["BUILDING", "BUILDING", 5000, 5000]]}
+
+    monkeypatch.setattr(ss, "_execute_source_query", _exec)
+    es, met, detail = ss.evaluate_join_sample_accuracy(parsed, "postgres", 0.05)
+    assert "result_map" in detail
+
+
 def test_join_sample_accuracy_uses_cluster_estimator(monkeypatch):
     parsed = parse_analytical_query(
         "SELECT c.c_mktsegment, COUNT(*) AS c "
