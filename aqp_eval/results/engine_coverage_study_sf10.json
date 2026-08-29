@@ -1,0 +1,308 @@
+[
+  {
+    "query": "count_star",
+    "sql": "SELECT COUNT(*) AS cnt FROM lineitem",
+    "target": null,
+    "trials": 25,
+    "empirical_coverage_pct": 100.0,
+    "rel_err_p50_pct": 0.0,
+    "rel_err_p95_pct": 0.0,
+    "reported_half_width_p50_pct": 0.0,
+    "mean_latency_ms": 0.6884666404221207,
+    "exact_latency_ms": 0.1982079993467778,
+    "speedup": 0.28789775380438215,
+    "mean_sample_rate": 0.005,
+    "stop_reasons": {
+      "ci_within_target": 25
+    }
+  },
+  {
+    "query": "count_star",
+    "sql": "SELECT COUNT(*) AS cnt FROM lineitem",
+    "target": 95.0,
+    "trials": 25,
+    "empirical_coverage_pct": 100.0,
+    "rel_err_p50_pct": 0.0,
+    "rel_err_p95_pct": 0.0,
+    "reported_half_width_p50_pct": 0.0,
+    "mean_latency_ms": 0.6034482386894524,
+    "exact_latency_ms": 0.1982079993467778,
+    "speedup": 0.3284589905792731,
+    "mean_sample_rate": 0.005,
+    "stop_reasons": {
+      "ci_within_target": 25
+    }
+  },
+  {
+    "query": "count_star",
+    "sql": "SELECT COUNT(*) AS cnt FROM lineitem",
+    "target": 99.0,
+    "trials": 25,
+    "empirical_coverage_pct": 100.0,
+    "rel_err_p50_pct": 0.0,
+    "rel_err_p95_pct": 0.0,
+    "reported_half_width_p50_pct": 0.0,
+    "mean_latency_ms": 0.5779335193801671,
+    "exact_latency_ms": 0.1982079993467778,
+    "speedup": 0.34295986078010426,
+    "mean_sample_rate": 0.005,
+    "stop_reasons": {
+      "ci_within_target": 25
+    }
+  },
+  {
+    "query": "sum_ungrouped",
+    "sql": "SELECT SUM(l_extendedprice) AS s FROM lineitem",
+    "target": null,
+    "trials": 25,
+    "empirical_coverage_pct": 88.0,
+    "rel_err_p50_pct": 0.08171364220993231,
+    "rel_err_p95_pct": 0.29065321021237744,
+    "reported_half_width_p50_pct": 0.21623598212874898,
+    "mean_latency_ms": 2.961676720296964,
+    "exact_latency_ms": 20.812333998037502,
+    "speedup": 7.027213286111346,
+    "mean_sample_rate": 0.005,
+    "stop_reasons": {
+      "ci_within_target": 25
+    }
+  },
+  {
+    "query": "sum_ungrouped",
+    "sql": "SELECT SUM(l_extendedprice) AS s FROM lineitem",
+    "target": 95.0,
+    "trials": 25,
+    "empirical_coverage_pct": 96.0,
+    "rel_err_p50_pct": 0.07453684473338792,
+    "rel_err_p95_pct": 0.29383300579312344,
+    "reported_half_width_p50_pct": 0.21716683305724066,
+    "mean_latency_ms": 3.781594962347299,
+    "exact_latency_ms": 20.812333998037502,
+    "speedup": 5.503586239473659,
+    "mean_sample_rate": 0.005,
+    "stop_reasons": {
+      "ci_within_target": 25
+    }
+  },
+  {
+    "query": "sum_ungrouped",
+    "sql": "SELECT SUM(l_extendedprice) AS s FROM lineitem",
+    "target": 99.0,
+    "trials": 25,
+    "empirical_coverage_pct": 96.0,
+    "rel_err_p50_pct": 0.1001921237861144,
+    "rel_err_p95_pct": 0.2110962920279339,
+    "reported_half_width_p50_pct": 0.21592476070299263,
+    "mean_latency_ms": 4.222030001692474,
+    "exact_latency_ms": 20.812333998037502,
+    "speedup": 4.929461417776405,
+    "mean_sample_rate": 0.005,
+    "stop_reasons": {
+      "ci_within_target": 25
+    }
+  },
+  {
+    "query": "sum_grouped",
+    "sql": "SELECT l_returnflag, SUM(l_extendedprice) AS s FROM lineitem GROUP BY l_returnflag",
+    "target": null,
+    "trials": 25,
+    "empirical_coverage_pct": 88.0,
+    "rel_err_p50_pct": 0.3093453872805748,
+    "rel_err_p95_pct": 0.7068819816588937,
+    "reported_half_width_p50_pct": 0.6407044205983142,
+    "mean_latency_ms": 9.093333439086564,
+    "exact_latency_ms": 103.34929199598264,
+    "speedup": 11.36539121635511,
+    "mean_sample_rate": 0.01,
+    "stop_reasons": {
+      "ci_within_target": 25
+    }
+  },
+  {
+    "query": "sum_grouped",
+    "sql": "SELECT l_returnflag, SUM(l_extendedprice) AS s FROM lineitem GROUP BY l_returnflag",
+    "target": 95.0,
+    "trials": 25,
+    "empirical_coverage_pct": 94.66666666666667,
+    "rel_err_p50_pct": 0.19088958704260067,
+    "rel_err_p95_pct": 0.6479599664471634,
+    "reported_half_width_p50_pct": 0.6414377260535016,
+    "mean_latency_ms": 8.550856719375588,
+    "exact_latency_ms": 103.34929199598264,
+    "speedup": 12.086425417677862,
+    "mean_sample_rate": 0.01,
+    "stop_reasons": {
+      "ci_within_target": 25
+    }
+  },
+  {
+    "query": "sum_grouped",
+    "sql": "SELECT l_returnflag, SUM(l_extendedprice) AS s FROM lineitem GROUP BY l_returnflag",
+    "target": 99.0,
+    "trials": 25,
+    "empirical_coverage_pct": 86.66666666666667,
+    "rel_err_p50_pct": 0.23925163173894082,
+    "rel_err_p95_pct": 0.790833393104088,
+    "reported_half_width_p50_pct": 0.6423382330162579,
+    "mean_latency_ms": 9.043023359845392,
+    "exact_latency_ms": 103.34929199598264,
+    "speedup": 11.428621588538016,
+    "mean_sample_rate": 0.01,
+    "stop_reasons": {
+      "ci_within_target": 25
+    }
+  },
+  {
+    "query": "avg_grouped",
+    "sql": "SELECT l_returnflag, AVG(l_extendedprice) AS a FROM lineitem GROUP BY l_returnflag",
+    "target": null,
+    "trials": 25,
+    "empirical_coverage_pct": 97.33333333333333,
+    "rel_err_p50_pct": 0.09016773806403276,
+    "rel_err_p95_pct": 0.2906835024416278,
+    "reported_half_width_p50_pct": 0.37378653893555386,
+    "mean_latency_ms": 8.84790352138225,
+    "exact_latency_ms": 112.68758401274681,
+    "speedup": 12.736077392844624,
+    "mean_sample_rate": 0.01,
+    "stop_reasons": {
+      "ci_within_target": 25
+    }
+  },
+  {
+    "query": "avg_grouped",
+    "sql": "SELECT l_returnflag, AVG(l_extendedprice) AS a FROM lineitem GROUP BY l_returnflag",
+    "target": 95.0,
+    "trials": 25,
+    "empirical_coverage_pct": 100.0,
+    "rel_err_p50_pct": 0.08389780699016944,
+    "rel_err_p95_pct": 0.26360262581491795,
+    "reported_half_width_p50_pct": 0.3716259081212027,
+    "mean_latency_ms": 9.266628400655463,
+    "exact_latency_ms": 112.68758401274681,
+    "speedup": 12.16058086507235,
+    "mean_sample_rate": 0.01,
+    "stop_reasons": {
+      "ci_within_target": 25
+    }
+  },
+  {
+    "query": "avg_grouped",
+    "sql": "SELECT l_returnflag, AVG(l_extendedprice) AS a FROM lineitem GROUP BY l_returnflag",
+    "target": 99.0,
+    "trials": 25,
+    "empirical_coverage_pct": 100.0,
+    "rel_err_p50_pct": 0.09752423184160904,
+    "rel_err_p95_pct": 0.28177219350515065,
+    "reported_half_width_p50_pct": 0.37090307553424107,
+    "mean_latency_ms": 9.342648358433507,
+    "exact_latency_ms": 112.68758401274681,
+    "speedup": 12.06163174396101,
+    "mean_sample_rate": 0.01,
+    "stop_reasons": {
+      "ci_within_target": 25
+    }
+  },
+  {
+    "query": "sum_filtered",
+    "sql": "SELECT l_returnflag, SUM(l_extendedprice) AS s FROM lineitem WHERE l_quantity > 25 GROUP BY l_returnflag",
+    "target": null,
+    "trials": 25,
+    "empirical_coverage_pct": 94.66666666666667,
+    "rel_err_p50_pct": 0.24908989446425872,
+    "rel_err_p95_pct": 0.9480549549496166,
+    "reported_half_width_p50_pct": 0.8476871148376721,
+    "mean_latency_ms": 13.9697199605871,
+    "exact_latency_ms": 122.05470899061766,
+    "speedup": 8.73709060274449,
+    "mean_sample_rate": 0.01,
+    "stop_reasons": {
+      "ci_within_target": 25
+    }
+  },
+  {
+    "query": "sum_filtered",
+    "sql": "SELECT l_returnflag, SUM(l_extendedprice) AS s FROM lineitem WHERE l_quantity > 25 GROUP BY l_returnflag",
+    "target": 95.0,
+    "trials": 25,
+    "empirical_coverage_pct": 97.33333333333333,
+    "rel_err_p50_pct": 0.3004673997312372,
+    "rel_err_p95_pct": 0.6335946218842476,
+    "reported_half_width_p50_pct": 0.8338974493832674,
+    "mean_latency_ms": 15.19017171813175,
+    "exact_latency_ms": 122.05470899061766,
+    "speedup": 8.035110547494801,
+    "mean_sample_rate": 0.01,
+    "stop_reasons": {
+      "ci_within_target": 25
+    }
+  },
+  {
+    "query": "sum_filtered",
+    "sql": "SELECT l_returnflag, SUM(l_extendedprice) AS s FROM lineitem WHERE l_quantity > 25 GROUP BY l_returnflag",
+    "target": 99.0,
+    "trials": 25,
+    "empirical_coverage_pct": 96.0,
+    "rel_err_p50_pct": 0.32088876515379106,
+    "rel_err_p95_pct": 0.7463910829523179,
+    "reported_half_width_p50_pct": 0.8367910579616962,
+    "mean_latency_ms": 13.303203279501759,
+    "exact_latency_ms": 122.05470899061766,
+    "speedup": 9.17483604709594,
+    "mean_sample_rate": 0.01,
+    "stop_reasons": {
+      "ci_within_target": 25
+    }
+  },
+  {
+    "query": "multi_agg",
+    "sql": "SELECT l_returnflag, COUNT(*) AS c, SUM(l_extendedprice) AS s, AVG(l_discount) AS a FROM lineitem GROUP BY l_returnflag",
+    "target": null,
+    "trials": 25,
+    "empirical_coverage_pct": 94.66666666666667,
+    "rel_err_p50_pct": 0.16866256347092817,
+    "rel_err_p95_pct": 0.5319991616994063,
+    "reported_half_width_p50_pct": 0.473170348677157,
+    "mean_latency_ms": 15.943951878580265,
+    "exact_latency_ms": 166.75670800032094,
+    "speedup": 10.45893196807427,
+    "mean_sample_rate": 0.01,
+    "stop_reasons": {
+      "ci_within_target": 25
+    }
+  },
+  {
+    "query": "multi_agg",
+    "sql": "SELECT l_returnflag, COUNT(*) AS c, SUM(l_extendedprice) AS s, AVG(l_discount) AS a FROM lineitem GROUP BY l_returnflag",
+    "target": 95.0,
+    "trials": 25,
+    "empirical_coverage_pct": 93.33333333333333,
+    "rel_err_p50_pct": 0.1858701496812572,
+    "rel_err_p95_pct": 0.6878207312080692,
+    "reported_half_width_p50_pct": 0.4736681752442786,
+    "mean_latency_ms": 15.268701879540458,
+    "exact_latency_ms": 166.75670800032094,
+    "speedup": 10.921472520448464,
+    "mean_sample_rate": 0.01,
+    "stop_reasons": {
+      "ci_within_target": 25
+    }
+  },
+  {
+    "query": "multi_agg",
+    "sql": "SELECT l_returnflag, COUNT(*) AS c, SUM(l_extendedprice) AS s, AVG(l_discount) AS a FROM lineitem GROUP BY l_returnflag",
+    "target": 99.0,
+    "trials": 25,
+    "empirical_coverage_pct": 95.11111111111111,
+    "rel_err_p50_pct": 0.12221597486889181,
+    "rel_err_p95_pct": 0.5618861767359087,
+    "reported_half_width_p50_pct": 0.47951365621863873,
+    "mean_latency_ms": 15.42300003929995,
+    "exact_latency_ms": 166.75670800032094,
+    "speedup": 10.812209529624694,
+    "mean_sample_rate": 0.01,
+    "stop_reasons": {
+      "ci_within_target": 25
+    }
+  }
+]
