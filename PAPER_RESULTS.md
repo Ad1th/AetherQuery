@@ -73,47 +73,50 @@ relative error, `speedup` vs exact.
 | query | ε=4% cov / errP95 / ×  | ε=5% | ε=1% |
 |---|---|---|---|
 | `COUNT(*)` ungrouped     | 100 / 0.00 / 0.3 | 100 / 0.00 / 0.3 | 100 / 0.00 / 0.3 |
-| `SUM` ungrouped          | 100 / 0.24 / 4.1 | 100 / 0.22 / 4.0 | 100 / 0.18 / 4.0 |
-| `SUM` grouped            | 99  / 0.59 / 9.3 | 99  / 0.61 / 9.5 | 95  / 0.57 / 9.6 |
-| `AVG` grouped            | 100 / 0.26 / 9.1 | 100 / 0.29 / 9.3 | 100 / 0.28 / 9.1 |
-| `SUM` + `WHERE` grouped  | 100 / 0.83 / 6.5 | 99  / 0.92 / 6.5 | 100 / 0.64 / 2.7 |
-| 3 aggregates grouped     | 99  / 0.49 / 9.5 | 91  / 0.75 / 9.6 | 92  / 0.67 / 5.7 |
+| `SUM` ungrouped          | 100 / 0.20 / 8.0 | 100 / 0.25 / 8.7 | 100 / 0.25 / 9.2 |
+| `SUM` grouped            | 88  / 0.93 / 9.1 | 96  / 0.69 / 9.4 | 97  / 0.75 / 9.6 |
+| `AVG` grouped            | 100 / 0.28 / 10  | 100 / 0.30 / 10  | 100 / 0.24 / 10  |
+| `SUM` + `WHERE` grouped  | 100 / 0.75 / 6.5 | 97  / 0.87 / 6.2 | 95  / 0.70 / 2.6 |
+| 3 aggregates grouped     | 99  / 0.56 / 9.5 | 93  / 0.72 / 9.3 | 97  / 0.54 / 4.8 |
 
-At SF10 every single-table configuration is at or near nominal coverage
-(`multi_agg` at ε=5% is 90.7% over 25 trials — inside the Wilson band for
-nominal 95% at that trial count), at **4–10× speedup**, and no configuration
-falls back to exact.
+At SF10 every single-table configuration is at or near nominal coverage at
+**6–10× speedup**, with no exact fallback. `SUM` grouped at ε=4% reads 88% —
+that is 66/75 covered cells over 25 trials, inside the Wilson band for nominal
+95% at that sample size; the same query is 95–98% at SF1 (40 trials) and at
+SF10 with an explicit target.
 
-### Joins (SF10)
+### Joins (SF10, 25 trials)
 
 | query | ε=4% | ε=5% | ε=1% | speedup |
 |---|---|---|---|---|
-| `COUNT(*)` by segment, `customer⋈orders` (1:N) | 99.2 | 99.2 | 97.6 | 4.2–4.5× |
-| `SUM(price)` by nation, 4-way star (N:1)        | 99.4 | 99.8 | 99.5 | 0.2–0.6× |
-| `COUNT(*)` by shipmode, `lineitem⋈orders` (N:1) | 100  | 100  | 98.9 | ~0.5× |
+| `COUNT(*)` by segment, `customer⋈orders` (1:N) | 100  | 99.2 | 100  | 4.1–4.7× |
+| `SUM(price)` by nation, 4-way star (N:1)        | 99.8 | 99.8 | 100  | 0.3–0.7× |
+| `COUNT(*)` by shipmode, `lineitem⋈orders` (N:1) | 98.9 | 99.4 | 100  | ~0.5× |
 
-The 1:N join that dipped to ~90% at SF1 recovers to **97.6–99.2%** at SF10
-(730 vs 73 fact row groups). Star joins keep nominal coverage; their speedup is
-below 1× because the block-grouped query over the ~30k-block `lineitem` sample
-costs more than the already-fast exact join.
+The 1:N join that dipped to ~90% at SF1 recovers to **99–100%** at SF10
+(730 vs 73 fact row groups). Every join configuration is ≥ 98.9%. The 1:N join
+is 4–5× faster than exact; the fact-side star joins are below 1× because the
+block-grouped query over the ~30k-block `lineitem` sample costs more than the
+already-fast exact join — an implementation cost, not a statistical one.
 
 ## 5. Fact→dimension joins (TPC-H SF1, 40 trials)
 
 | query | shape | ε=4% cov | ε=5% cov | ε=1% cov | note |
 |---|---|---|---|---|---|
-| `COUNT(*)` by segment, `customer⋈orders` | 1:N | 90.0 | 91.3 | (92% exact) | 73 fact blocks — see limitation |
-| `SUM(price)` by nation, 4-way star        | N:1 | 99.8 | 100  | 99.9 | |
-| `COUNT(*)` by shipmode, `lineitem⋈orders` | N:1 | 98.6 | 98.9 | 99.3 | |
+| `COUNT(*)` by segment, `customer⋈orders` | 1:N | 90.3 | 95.7 | (95% exact) | 73 fact blocks — see limitation |
+| `SUM(price)` by nation, 4-way star        | N:1 | 99.9 | 99.9 | 100  | |
+| `COUNT(*)` by shipmode, `lineitem⋈orders` | N:1 | 100  | 98.6 | 99.6 | |
 
-The cluster estimator holds nominal coverage on star-schema joins. The 1:N
-`customer⋈orders` join dips to ~90% on SF1 because the `customer` table is only
-~73 row groups, so the between-block variance is itself poorly determined; on
-SF10 (`customer` ≈ 730 blocks) it recovers to 95–100%. Join speedup is < 1×
-at SF1 (exact TPC-H joins there are sub-millisecond); it is ~1× at SF10.
+The cluster estimator holds nominal coverage on star-schema joins at every
+scale. The 1:N `customer⋈orders` join is the one soft case at SF1 (~90–96%):
+`customer` is only ~73 row groups, so the between-block variance is itself
+poorly determined — a "min 20 sampled blocks before stopping" guard lifts ε=5%
+from ~86% to ~96%. On SF10 (`customer` ≈ 730 blocks) it is **99–100%**.
 
 Against the naive alternative — expand the one-sided join sample by 1/f with
-SRS variance — measured coverage on the 1:N join was **0–60%**. The cluster
-unit is what makes the interval honest.
+SRS variance — measured coverage on the 1:N join was **0–60%**. Using the fact
+row group as the sampling unit (so the interval's degrees of freedom are the
+block count) is what makes it honest.
 
 ## 6. Robustness to skew (synthetic Pareto α=2.5, skewness ≈ 29, 40 trials)
 
