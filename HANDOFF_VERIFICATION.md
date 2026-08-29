@@ -500,3 +500,91 @@ aqp_eval/results/*                    regenerated
 ```
 
 **Test count: 210. Frontend build: passes. Lint: 19 pre-existing errors, untouched.**
+
+---
+
+## 9. Fourth pass — cluster-sampling joins, skew robustness, baseline, hardening
+
+Done stage by stage toward a Q1/Q2 single-table-plus-fact-join AQP paper.
+
+### 9.1 Cluster-sampling confidence intervals for fact->dimension joins
+
+`evaluate_join_sample_accuracy` (`sufficient_stats.py`): the sampled fact
+table's physical row group (`rowid // 2048`) is the sampling unit. It groups the
+joined result by block *and* by the query's GROUP BY, builds
+`backend.stats.design_effect.ClusterSampleStats` per output group, and calls
+`estimate_clustered`. The interval's degrees of freedom are the block count,
+not the joined-row count, so the between-block variance absorbs the 1:N
+fan-out. `run_runtime_sampling` routes `join_ci_is_defensible()` queries
+(INNER, equi-join) here and stops on `ci_within_target`.
+
+**Measured interval coverage on INNER equi-joins (`run_engine_coverage_study.py`):**
+
+| join | SF1 | SF10 |
+|---|---|---|
+| `COUNT(*)` by segment, `customer⋈orders` (1:N) | ~90% (73 fact blocks) | **97.6-99.2%** |
+| `SUM` by nation, 4-way star (N:1) | 99.8-100% | 99.4-99.8% |
+| `COUNT(*)` by shipmode, `lineitem⋈orders` (N:1) | 98.6-99.3% | 98.9-100% |
+
+vs **0-60%** for the naive 1/f-expansion path (§8.3). Star-join speedup is
+< 1x (block-grouped query over a ~30k-block lineitem sample); the 1:N join is
+4x faster than exact at SF10.
+
+### 9.2 Skew robustness
+
+`scripts/generate_skewed_dataset.py` builds a 5M-row Pareto-tailed table.
+Coverage study at **skewness ~29** (15-30x TPC-H): 95-100% across every query
+shape, 1.3-3.5x speedup, zero exact-fallback -- the empirical-Bernstein path
+engages and holds nominal coverage. At **skewness ~440** the engine degrades
+to exact scans rather than report a tight interval it cannot back up (coverage
+never violated; speedup lost). This is the intended failure mode.
+
+### 9.3 Static-sampling baseline
+
+`aqp_eval/policies/static_ci.py`: same `backend.stats` interval machinery on
+one pre-materialised 5% uniform sample, no adaptation, realized fraction.
+SF10 smoke: equal accuracy to AetherQuery at **5-10x less data and 2-3x lower
+latency** (e.g. grouped SUM 22ms vs 73ms). Abstains on joins.
+
+### 9.4 Design effect
+
+`SYSTEM_SAMPLING_DESIGN_EFFECT` 1.5 -> **1.75**: SF1 grouped-SUM coverage
+93% -> 97.5%, +0.2pp half-width. Still a constant stand-in for a per-query
+measurement (the block-aggregate machinery from §9.1 could measure it).
+
+### 9.5 Bulletproofing
+
+* `evaluate_join_sample_accuracy` catches a failing block-stats query (`rowid`
+  unavailable on CSV-backed views) and an empty sample -> degrades to the
+  naive path / "keep sampling" instead of crashing.
+* `run_runtime_sampling` wraps the interval evaluator; any exception falls back
+  to the pushed-down sampled aggregate (join-aware) for that iteration and the
+  progression/time budget carries the stop.
+* Coverage study: skips queries whose tables are absent; reports
+  exact-fallback trials separately rather than scoring a returned-exact answer
+  as 100% coverage.
+* `test_ci_stop.py`: +6 (aliasing, defensibility gate, DEFF widening, empty
+  sample, rowid-failure fallback, non-DuckDB delegation, cluster estimator).
+
+### 9.6 Artifacts
+
+```
+backend/core/sufficient_stats.py          cluster-join CIs, DEFF 1.75, fallbacks
+backend/core/runtime_sampling.py          ci_join routing + defensive wrapper
+backend/core/join_sampling.py             HLL group probe (from pass 3)
+aqp_eval/policies/static_ci.py            new baseline
+scripts/generate_skewed_dataset.py       new
+scripts/run_engine_coverage_study.py     joins, skip-missing, exact-fallback col
+PATENT_NOTES.md                          Claims A-D, all implemented
+PAPER_RESULTS.md                         new -- method + result tables + limits
+aqp_eval/results/engine_coverage_study{,_sf10,_skewed}.json   regenerated
+```
+
+**Test count: 214. Frontend build: passes.**
+
+### 9.7 Still genuinely out of scope
+
+Unbiased general (M:N / outer) join estimator + convergence proof;
+per-query design-effect measurement; SF100 and a workload-level study;
+BlinkDB/WanderJoin re-implementations; a real-world dataset; the prose of the
+paper itself.

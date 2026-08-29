@@ -70,8 +70,32 @@ relative error, `speedup` vs exact.
 
 ## 4. Coverage and speedup — single-table (TPC-H SF10, 25 trials)
 
-_(fill from `aqp_eval/results/engine_coverage_study_sf10.json` once the run
-completes — SF10 is where grouped SUM clears 95% and speedups reach 8–13×.)_
+| query | ε=4% cov / errP95 / ×  | ε=5% | ε=1% |
+|---|---|---|---|
+| `COUNT(*)` ungrouped     | 100 / 0.00 / 0.3 | 100 / 0.00 / 0.3 | 100 / 0.00 / 0.3 |
+| `SUM` ungrouped          | 100 / 0.24 / 4.1 | 100 / 0.22 / 4.0 | 100 / 0.18 / 4.0 |
+| `SUM` grouped            | 99  / 0.59 / 9.3 | 99  / 0.61 / 9.5 | 95  / 0.57 / 9.6 |
+| `AVG` grouped            | 100 / 0.26 / 9.1 | 100 / 0.29 / 9.3 | 100 / 0.28 / 9.1 |
+| `SUM` + `WHERE` grouped  | 100 / 0.83 / 6.5 | 99  / 0.92 / 6.5 | 100 / 0.64 / 2.7 |
+| 3 aggregates grouped     | 99  / 0.49 / 9.5 | 91  / 0.75 / 9.6 | 92  / 0.67 / 5.7 |
+
+At SF10 every single-table configuration is at or near nominal coverage
+(`multi_agg` at ε=5% is 90.7% over 25 trials — inside the Wilson band for
+nominal 95% at that trial count), at **4–10× speedup**, and no configuration
+falls back to exact.
+
+### Joins (SF10)
+
+| query | ε=4% | ε=5% | ε=1% | speedup |
+|---|---|---|---|---|
+| `COUNT(*)` by segment, `customer⋈orders` (1:N) | 99.2 | 99.2 | 97.6 | 4.2–4.5× |
+| `SUM(price)` by nation, 4-way star (N:1)        | 99.4 | 99.8 | 99.5 | 0.2–0.6× |
+| `COUNT(*)` by shipmode, `lineitem⋈orders` (N:1) | 100  | 100  | 98.9 | ~0.5× |
+
+The 1:N join that dipped to ~90% at SF1 recovers to **97.6–99.2%** at SF10
+(730 vs 73 fact row groups). Star joins keep nominal coverage; their speedup is
+below 1× because the block-grouped query over the ~30k-block `lineitem` sample
+costs more than the already-fast exact join.
 
 ## 5. Fact→dimension joins (TPC-H SF1, 40 trials)
 
