@@ -134,6 +134,8 @@ class TestJoinParser:
         parsed = parse_analytical_query(query)
 
         assert parsed.has_joins
+        assert parsed.table_alias == "c"
+        assert parsed.joins[0].right_alias == "o"
         assert parsed.joins[0].join_type == "LEFT"
 
     def test_multi_way_join(self):
@@ -185,6 +187,7 @@ class TestJoinQueryBuilder:
         sampled_sql = build_stratified_join_query(parsed, "duckdb", 0.10)
 
         assert "TABLESAMPLE SYSTEM (10.0" in sampled_sql
+        assert "FROM orders o TABLESAMPLE" in sampled_sql
         assert "INNER JOIN customers" in sampled_sql
         assert "GROUP BY c.region" in sampled_sql
 

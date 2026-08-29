@@ -211,28 +211,25 @@ def build_stratified_join_query(
     - Preserves join selectivity better than sampling after join
     - Uses TABLESAMPLE when available for efficiency
 
-    Note: We rebuild the full query from the original SQL to preserve table aliases,
-    since the parser doesn't currently capture them in the ParsedQuery structure.
+    Table aliases are retained by the parser and used when rebuilding the FROM
+    clause so expressions in SELECT, JOIN, WHERE, and GROUP BY remain valid.
     """
     if not parsed.joins:
         raise ValueError("build_stratified_join_query requires a query with JOINs")
 
-    # Extract the original FROM clause with aliases from raw SQL
-    # This preserves table aliases that users specify (e.g., "FROM lineitem l")
-    import re
+    base_reference = parsed.table
+    if parsed.table_alias:
+        base_reference += f" {parsed.table_alias}"
 
-    original_sql = parsed.raw_sql
-
-    # Find the FROM clause up to WHERE/GROUP BY/ORDER BY/LIMIT
-    from_match = re.search(
-        r'(?is)\bFROM\s+(.+?)(?:\s+WHERE|\s+GROUP\s+BY|\s+ORDER\s+BY|\s+LIMIT|$)',
-        original_sql
-    )
-
-    if not from_match:
-        raise ValueError("Could not extract FROM clause from original query")
-
-    from_clause_original = from_match.group(1).strip()
+    join_references = []
+    for join in parsed.joins:
+        right_reference = join.right_table
+        if join.right_alias:
+            right_reference += f" {join.right_alias}"
+        join_references.append(
+            f"{join.join_type} JOIN {right_reference} ON {join.on_condition}"
+        )
+    from_clause_original = " ".join([base_reference, *join_references])
 
     # Build SELECT clause
     select_parts: list[str] = []
@@ -256,18 +253,14 @@ def build_stratified_join_query(
     if source == "duckdb":
         # DuckDB syntax: table_name alias TABLESAMPLE SYSTEM (x%)
         # Inject TABLESAMPLE after the primary FROM table to preserve join selectivity
-        from_clause = re.sub(
-            r'^\s*([a-zA-Z_][a-zA-Z0-9_]*)(?:\s+([a-zA-Z_][a-zA-Z0-9_]*))?',
-            lambda m: f"{m.group(1)} {m.group(2) or ''} TABLESAMPLE SYSTEM ({percent:.4f} PERCENT)",
-            from_clause_original,
-            count=1,
+        from_clause = (
+            f"{base_reference} TABLESAMPLE SYSTEM ({percent:.4f} PERCENT)"
+            + (" " + " ".join(join_references) if join_references else "")
         )
     elif source == "postgres":
-        from_clause = re.sub(
-            r'^\s*([a-zA-Z_][a-zA-Z0-9_]*)(?:\s+([a-zA-Z_][a-zA-Z0-9_]*))?',
-            lambda m: f"{m.group(1)} {m.group(2) or ''} TABLESAMPLE SYSTEM ({percent:.4f})",
-            from_clause_original,
-            count=1,
+        from_clause = (
+            f"{base_reference} TABLESAMPLE SYSTEM ({percent:.4f})"
+            + (" " + " ".join(join_references) if join_references else "")
         )
     else:  # MySQL - no TABLESAMPLE, will use WHERE RAND()
         from_clause = from_clause_original
