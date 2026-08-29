@@ -15,10 +15,14 @@ from backend.core import runtime_sampling as rs
 from backend.core.parser import parse_analytical_query
 
 
+# A LEFT join is deliberately NOT "CI-defensible", so run_runtime_sampling keeps
+# it on the group-completeness heuristic path these tests exercise (a defensible
+# INNER equi-join would route through the confidence-interval path instead --
+# see test_ci_stop.py).
 JOIN_SQL = (
     "SELECT c.c_mktsegment, COUNT(*) AS cnt "
-    "FROM customer c JOIN orders o ON c.c_custkey = o.o_custkey "
-    "JOIN lineitem l ON o.o_orderkey = l.l_orderkey "
+    "FROM customer c LEFT JOIN orders o ON c.c_custkey = o.o_custkey "
+    "LEFT JOIN lineitem l ON o.o_orderkey = l.l_orderkey "
     "GROUP BY c.c_mktsegment"
 )
 

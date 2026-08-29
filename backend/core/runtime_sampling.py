@@ -242,11 +242,19 @@ def run_runtime_sampling(
         and not parsed.has_joins  # Force multi-iteration for JOINs
     )
 
-    # Confidence-interval stopping for non-JOIN aggregate queries: stop when a
-    # real Bonferroni-corrected CI over the whole result grid is inside the
-    # error budget, not when two consecutive samples happen to agree (stability
-    # is not accuracy). JOINs keep the group-completeness heuristic because
-    # backend.stats does not model join-key multiplicity variance.
+    # Confidence-interval stopping: stop when a real Bonferroni-corrected CI
+    # over the whole result grid is inside the error budget, not when two
+    # consecutive samples happen to agree (stability is not accuracy).
+    #
+    # Non-JOIN aggregates only. Extending this to joins was tried and measured
+    # to under-cover badly (interval coverage 0-60% vs a nominal 95%): a 1:N
+    # join sample is cluster-sampled, its true design effect is large, and a
+    # simple 1/f expansion with SRS variance is wildly optimistic. Doing it
+    # properly needs backend.stats.design_effect's ClusterSampleStats and
+    # block-level aggregates; until then joins keep the completeness heuristic.
+    # join_ci_is_defensible / build_sufficient_stats_sql's join branch remain as
+    # scaffolding for that work.
+    ci_join = False
     use_ci_stop = (not parsed.has_joins) and bool(getattr(parsed, "aggregates", None))
     if accuracy_target is not None:
         ci_target_error = max(0.005, min(0.5, 1.0 - float(accuracy_target) / 100.0))
@@ -358,7 +366,7 @@ def run_runtime_sampling(
             )
 
         # Route to JOIN-specific execution if query contains JOINs
-        if parsed.has_joins:
+        if parsed.has_joins and not ci_join:
             aggregate_payload, query_time, sample_query = execute_stratified_join_sample(
                 parsed,
                 source,
@@ -468,18 +476,32 @@ def run_runtime_sampling(
             stop_reason = "single_pass"
             break
 
-        # Confidence-interval stopping path (non-JOIN aggregates).
+        # Confidence-interval stopping path. For defensible INNER-equi joins the
+        # completeness guard still applies: a small fact sample can miss whole
+        # dimension groups, and a tight interval on the groups it did see says
+        # nothing about the ones it missed.
         if use_ci_stop:
-            if ci_met:
+            if ci_met and not groups_incomplete:
                 stop_reason = "ci_within_target"
                 break
-            if elapsed >= config["time_budget_seconds"] and len(iteration_details) >= 2:
+            if (
+                elapsed >= config["time_budget_seconds"]
+                and len(iteration_details) >= 2
+                and not groups_incomplete
+            ):
                 stop_reason = "time_budget_exceeded"
+                break
+            if ci_join and groups_incomplete and groups_returned >= aqp_group_ceiling:
+                stop_reason = "groups_incomplete"
                 break
             # Grow the next sample in proportion to how far the widest interval
             # still is from the target: far away -> 4x, close -> 1.25x. Drive
-            # the ladder purely off this so the sequence stays monotone.
-            if ci_max_rel_hw and ci_max_rel_hw > 0:
+            # the ladder purely off this so the sequence stays monotone. While
+            # dimension groups are still missing, ignore the (misleadingly tight)
+            # interval on the groups seen so far and escalate hard.
+            if groups_incomplete:
+                synth_conf = 0.0
+            elif ci_max_rel_hw and ci_max_rel_hw > 0:
                 synth_conf = max(0.0, min(100.0, (ci_target_error / ci_max_rel_hw) * 100.0))
             else:
                 synth_conf = 95.0
