@@ -108,34 +108,49 @@ def run(database: str, trials: int, out_path: str):
     con = ddb.get_connection()
     records = []
 
-    print(f"{'query':16} {'target':7} {'cover%':7} {'err_p50':8} {'err_p95':8} "
-          f"{'hw_p50':8} {'speedup':8} {'stop_reason':18}")
-    print("-" * 90)
+    # stop_reasons that mean "the engine gave up on approximation and returned
+    # the exact answer" -- correct behaviour, but not a test of interval
+    # coverage, so they are reported separately rather than as 100% coverage.
+    exact_fallbacks = {"progression_exhausted", "full_scan", "census"}
+
+    print(f"{'query':17} {'target':7} {'cover%':7} {'n_ci':6} {'exact%':7} "
+          f"{'err_p50':8} {'err_p95':8} {'hw_p50':8} {'speedup':8} {'stop':18}")
+    print("-" * 104)
 
     for qname, sql in QUERIES.items():
         parsed = parse_analytical_query(sql)
-        truth = _truth(con, sql, parsed)
-        t0 = time.perf_counter()
-        con.execute(sql).fetchall()
-        exact_ms = (time.perf_counter() - t0) * 1000
+        try:
+            truth = _truth(con, sql, parsed)
+            t0 = time.perf_counter()
+            con.execute(sql).fetchall()
+            exact_ms = (time.perf_counter() - t0) * 1000
+        except Exception as exc:
+            print(f"{qname:17} SKIPPED  ({type(exc).__name__}: {str(exc)[:50]})")
+            continue
 
         for target in TARGETS:
-            covered = total = 0
-            rel_errs, half_widths, lat_ms, rates = [], [], [], []
+            covered = total = raw_trials = exact_trials = 0
+            rel_errs, half_widths, lat_ms, rates, raw_rel_errs = [], [], [], [], []
             stop_reasons = {}
             for _ in range(trials):
                 t0 = time.perf_counter()
                 payload = run_approx(sql, "duckdb", mode="balanced", accuracy_target=target)
                 lat_ms.append((time.perf_counter() - t0) * 1000)
                 rates.append(payload.get("sample_rate"))
-                stop_reasons[payload.get("stop_reason")] = (
-                    stop_reasons.get(payload.get("stop_reason"), 0) + 1
-                )
+                sr = payload.get("stop_reason")
+                stop_reasons[sr] = stop_reasons.get(sr, 0) + 1
+                is_exact = sr in exact_fallbacks or payload.get("sample_rate", 0) >= 1.0
+                raw_trials += 1
+                if is_exact:
+                    exact_trials += 1
                 for (gk, alias), (est, rel_hw) in _approx_cells(payload, parsed).items():
                     tv = truth.get(gk, {}).get(alias)
                     if tv is None or tv == 0:
                         continue
                     rel_err = abs(est - tv) / abs(tv)
+                    raw_rel_errs.append(rel_err)
+                    if is_exact:
+                        continue  # exact answer; not a coverage test
                     rel_errs.append(rel_err)
                     if rel_hw is not None:
                         half_widths.append(rel_hw)
@@ -144,20 +159,23 @@ def run(database: str, trials: int, out_path: str):
                             covered += 1
 
             cover_pct = (100.0 * covered / total) if total else float("nan")
-            err_p50 = statistics.median(rel_errs) * 100 if rel_errs else float("nan")
+            exact_pct = 100.0 * exact_trials / max(1, raw_trials)
+            _errs = rel_errs or raw_rel_errs
+            err_p50 = statistics.median(_errs) * 100 if _errs else float("nan")
             err_p95 = (
-                statistics.quantiles(rel_errs, n=20)[-1] * 100
-                if len(rel_errs) >= 20 else max(rel_errs) * 100 if rel_errs else float("nan")
+                statistics.quantiles(_errs, n=20)[-1] * 100
+                if len(_errs) >= 20 else max(_errs) * 100 if _errs else float("nan")
             )
             hw_p50 = statistics.median(half_widths) * 100 if half_widths else float("nan")
             speedup = exact_ms / statistics.mean(lat_ms) if lat_ms else float("nan")
             top_stop = max(stop_reasons, key=stop_reasons.get)
 
-            print(f"{qname:16} {str(target):7} {cover_pct:7.1f} {err_p50:8.3f} "
-                  f"{err_p95:8.3f} {hw_p50:8.3f} {speedup:8.2f} {top_stop:18}")
+            print(f"{qname:17} {str(target):7} {cover_pct:7.1f} {total:6d} {exact_pct:7.0f} "
+                  f"{err_p50:8.3f} {err_p95:8.3f} {hw_p50:8.3f} {speedup:8.2f} {top_stop:18}")
             records.append({
                 "query": qname, "sql": sql.strip(), "target": target,
                 "trials": trials, "empirical_coverage_pct": cover_pct,
+                "ci_cells_scored": total, "exact_fallback_pct": exact_pct,
                 "rel_err_p50_pct": err_p50, "rel_err_p95_pct": err_p95,
                 "reported_half_width_p50_pct": hw_p50,
                 "mean_latency_ms": statistics.mean(lat_ms),
