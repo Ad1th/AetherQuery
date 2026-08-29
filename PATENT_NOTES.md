@@ -104,6 +104,13 @@ observed or silently drops unobserved ones.
   than the nominal `TABLESAMPLE` percentage, to remove the block-sampler's
   nominal-vs-actual bias.
 * Deriving the error budget from a user "accuracy target" as `1 − target/100`.
+* Inflating the design effect of `SUM`/`AVG` interval variance by a constant
+  factor (implemented: 1.5) to account for engine-native row-group
+  (`TABLESAMPLE SYSTEM`) sampling, while leaving `COUNT` at 1.0. Measured to
+  lift grouped-`SUM` coverage from ~86 % to ~95 % at a nominal-95 % target.
+  (`backend/core/sufficient_stats.py:SYSTEM_SAMPLING_DESIGN_EFFECT`.)
+* HLL group-count probe that resolves the `GROUP BY` key against every table in
+  a join, sampling the fact table but counting dimension keys exactly.
 
 ---
 
@@ -112,7 +119,12 @@ observed or silently drops unobserved ones.
 * **JOIN aggregate estimator is heuristic.** Scaling a one-sided join sample by
   1/f is not unbiased for many join shapes; the system currently pairs it with
   the completeness monitor (Claim C) rather than a proven estimator. A claim to
-  "unbiased approximate joins" is **not** currently supported.
+  "unbiased approximate joins" is **not** currently supported. Routing joins
+  through the CI machinery (Claim A) was implemented and measured to under-cover
+  at 0–60 % vs a nominal 95 % on 1:N joins (cluster-sampling design effect), and
+  reverted. A defensible join claim needs a cluster-sampling estimator
+  (`backend.stats.design_effect.ClusterSampleStats`) fed by block-level
+  aggregates.
 * **HLL group-count probe is weak** when the GROUP BY key is not on the primary
   relation (falls back to 1). Narrow Claim B or improve the probe first.
 * **Grouped-SUM coverage** on heavy-tailed columns is ~88 % at the loose

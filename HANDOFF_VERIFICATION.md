@@ -407,3 +407,96 @@ backend/tests/test_hll_join_rate.py         new  (5)
 aqp_eval/results/sf{1,10}_smoke.json        regenerated with CI stopping
 aqp_eval/results/engine_coverage_study*.json  new  - coverage study output
 ```
+
+---
+
+## 8. Third pass — coverage closed, HLL probe fixed, join-CI attempted & reverted
+
+### 8.1 Grouped-SUM coverage gap closed (design-effect inflation)
+
+`sufficient_stats.SYSTEM_SAMPLING_DESIGN_EFFECT = 1.5` is now applied to
+SUM/AVG cells (not COUNT). Engine-native `TABLESAMPLE SYSTEM` draws whole row
+groups, so its variance exceeds simple-random-sampling theory; the constant
+inflation widens SUM/AVG intervals ~25 %.
+
+**Measured coverage, engine end-to-end, clean TPC-H SF10, 25 trials/config**
+(`aqp_eval/results/engine_coverage_study_sf10.json`):
+
+| query | target=none | target 95 % | target 99 % | speedup |
+|---|---|---|---|---|
+| count_star | 100 | 100 | 100 | ~1× |
+| sum_ungrouped | 100 | 100 | 96 | 3–4× |
+| sum_grouped | 97 | 95 | 91 | 9–10× |
+| avg_grouped | 100 | 100 | 100 | 12× |
+| sum_filtered | 100 | 99 | 97 | 8× |
+| multi_agg | 95 | 96 | 98 | 10× |
+
+So with `SYSTEM_SAMPLING_DESIGN_EFFECT = 1.5`, empirical coverage is **95–100 %
+at an explicit accuracy target across every query shape at SF10**, at 3–12×
+speedup. The one soft spot is grouped `SUM` at a 1 % target (91 %). SF1 is
+noisier (`sum_grouped` target-none 87 %) but at an explicit target is ≥ 93 %.
+This is a *measured, reproducible* result — the experimental backbone for a
+single-table AQP paper.
+
+Proper per-query design-effect measurement (block-level aggregates,
+`backend.stats.design_effect.ClusterSampleStats`) is still the right long-term
+fix; the constant is a documented stand-in.
+
+### 8.2 HLL join group-count probe fixed
+
+`hll_guided_join_min_rate` now resolves the GROUP BY key against **every table
+in the query**, sampling the fact table but counting dimension keys exactly
+(1 % of a 25-row `nation` is noise). `n.n_name` now estimates 25 groups
+(was 1); `c.c_name` estimates ~1.5 M and the rate correctly clamps to the
+ceiling (a per-customer group-by is not an AQP candidate).
+
+### 8.3 CI stopping for JOINs — attempted, measured, reverted
+
+Extending the confidence-interval path to INNER equi-joins (expand the
+one-sided fact sample by 1/f, reuse the single-table estimators) was
+implemented and measured: **interval coverage 0–60 % versus a nominal 95 %**,
+with true errors of 8–19 % on a 1:N join. A 1:N join sample is *cluster*
+sampled — each sampled fact row drags in a cluster of joined rows — so its
+design effect is large and an SRS-variance interval is wildly optimistic.
+Shipping intervals labelled "within target" that are 15 % wrong is worse than
+the honest heuristic, so the routing was reverted.
+
+`sufficient_stats.join_ci_is_defensible` and `build_sufficient_stats_sql`'s
+JOIN branch (with the group-column aliasing fix, which is a real bug fix) are
+kept as **unwired scaffolding**. Doing joins properly needs
+`backend.stats.design_effect.ClusterSampleStats` fed by block-level
+aggregates — the same "measure the design effect" work §8.1 defers.
+
+### 8.4 Reproducibility artifact
+
+`Dockerfile` + `scripts/reproduce.sh`: the image installs backend deps,
+generates a clean TPC-H SF1 with `dbgen` at build time, and `docker run`
+executes the unit tests, the smoke harness, and the coverage study, writing
+JSON artifacts to `aqp_eval/results/`. `reproduce.sh [SF]` does the same
+outside Docker against any scale factor.
+
+### 8.5 Not done (and why)
+
+* **BlinkDB / WanderJoin baseline** — a quick stub produced wrong numbers
+  (4900 % error on a join) and was removed. A faithful implementation is a
+  real project; it stays on the paper TODO. The 5 existing baselines (exact,
+  fixed-fraction, geometric, fixed-ladder, online-agg) remain.
+* **SF100 scale point** — needs ~27 GB, disk had 14 GB free.
+* **Real-world dataset** (NYC taxi / Wikipedia) — multi-GB download, not
+  appropriate to pull here.
+* **Unbiased general JOIN estimator + convergence proof** — genuine research.
+* **Prior-art search / claim drafting** — attorney task.
+* **Writing the paper** — yours.
+
+### 8.6 Files added / changed in this pass
+
+```
+backend/core/sufficient_stats.py     DEFF inflation; join SQL branch; group-col aliasing; join_ci_is_defensible
+backend/core/runtime_sampling.py     ci_join reverted to False (kept the guard scaffolding)
+backend/core/join_sampling.py        HLL group-count probe resolves against all tables
+backend/tests/test_ci_stop.py        +3 (aliasing, defensibility gate, DEFF widening)
+Dockerfile, scripts/reproduce.sh     new — one-command reproduction
+aqp_eval/results/*                    regenerated
+```
+
+**Test count: 210. Frontend build: passes. Lint: 19 pre-existing errors, untouched.**
