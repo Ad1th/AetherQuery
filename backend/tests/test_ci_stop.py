@@ -109,6 +109,43 @@ def test_design_effect_widens_sum_intervals_but_not_count(monkeypatch):
     assert by_deff["c"]["half_width"] == pytest.approx(by_no["c"]["half_width"])
 
 
+def test_join_sample_accuracy_uses_cluster_estimator(monkeypatch):
+    parsed = parse_analytical_query(
+        "SELECT c.c_mktsegment, COUNT(*) AS c "
+        "FROM customer c JOIN orders o ON c.c_custkey = o.o_custkey "
+        "GROUP BY c.c_mktsegment"
+    )
+    ss._POPULATION_CACHE.clear()
+
+    # 40 fact blocks sampled, two mktsegments, ~500 joined rows per (block,group)
+    block_rows = []
+    for blk in range(40):
+        for seg in ("BUILDING", "AUTOMOBILE"):
+            block_rows.append({
+                "__aqp_blk": blk, "__aqp_grp_0": seg,
+                "__aqp_n_rows": 500 + (blk % 7) * 20, "__aqp_n_domain": 500 + (blk % 7) * 20,
+            })
+    cols = list(block_rows[0].keys())
+
+    def _exec(sql, source):
+        if "COUNT(*) FROM customer" in sql and "rowid" not in sql:
+            return {"columns": ["n"], "rows": [[150_000]]}
+        return {"columns": cols, "rows": [[r[c] for c in cols] for r in block_rows]}
+
+    monkeypatch.setattr(ss, "_execute_source_query", _exec)
+
+    es, met, detail = ss.evaluate_join_sample_accuracy(
+        parsed, "duckdb", 0.05, target_relative_error=0.10
+    )
+    methods = {e["method"] for e in detail["ci"]["estimates"]}
+    assert methods == {"cluster_clt"}
+    assert detail["blocks_sampled"] == 40
+    for e in detail["ci"]["estimates"]:
+        assert e["ci_low"] < e["estimate"] < e["ci_high"]
+        # df from blocks, not rows
+        assert e["n_domain"] > 40
+
+
 def test_grouped_sum_interval_tightens_with_fraction(monkeypatch):
     parsed = parse_analytical_query(
         "SELECT l_returnflag, SUM(l_extendedprice) AS s FROM lineitem GROUP BY l_returnflag"

@@ -8,9 +8,9 @@
     "rel_err_p50_pct": 0.0,
     "rel_err_p95_pct": 0.0,
     "reported_half_width_p50_pct": 0.0,
-    "mean_latency_ms": 0.3387280987226404,
-    "exact_latency_ms": 0.21579100575763732,
-    "speedup": 0.6370626073579232,
+    "mean_latency_ms": 0.3499437247228343,
+    "exact_latency_ms": 0.22375000116880983,
+    "speedup": 0.6393885226718279,
     "mean_sample_rate": 0.005,
     "stop_reasons": {
       "ci_within_target": 40
@@ -25,9 +25,9 @@
     "rel_err_p50_pct": 0.0,
     "rel_err_p95_pct": 0.0,
     "reported_half_width_p50_pct": 0.0,
-    "mean_latency_ms": 0.2555446521000704,
-    "exact_latency_ms": 0.21579100575763732,
-    "speedup": 0.8444356161800417,
+    "mean_latency_ms": 0.2519769986975007,
+    "exact_latency_ms": 0.22375000116880983,
+    "speedup": 0.8879778802247841,
     "mean_sample_rate": 0.005,
     "stop_reasons": {
       "ci_within_target": 40
@@ -42,9 +42,9 @@
     "rel_err_p50_pct": 0.0,
     "rel_err_p95_pct": 0.0,
     "reported_half_width_p50_pct": 0.0,
-    "mean_latency_ms": 0.2586009752121754,
-    "exact_latency_ms": 0.21579100575763732,
-    "speedup": 0.8344554987876066,
+    "mean_latency_ms": 0.24942807540355716,
+    "exact_latency_ms": 0.22375000116880983,
+    "speedup": 0.8970521895211595,
     "mean_sample_rate": 0.005,
     "stop_reasons": {
       "ci_within_target": 40
@@ -54,100 +54,100 @@
     "query": "sum_ungrouped",
     "sql": "SELECT SUM(l_extendedprice) AS s FROM lineitem",
     "target": null,
+    "trials": 40,
+    "empirical_coverage_pct": 100.0,
+    "rel_err_p50_pct": 0.23716104744743466,
+    "rel_err_p95_pct": 0.7147518371292443,
+    "reported_half_width_p50_pct": 0.8210426548599966,
+    "mean_latency_ms": 0.8049811753153335,
+    "exact_latency_ms": 1.3385409984039143,
+    "speedup": 1.6628227335621488,
+    "mean_sample_rate": 0.005,
+    "stop_reasons": {
+      "ci_within_target": 40
+    }
+  },
+  {
+    "query": "sum_ungrouped",
+    "sql": "SELECT SUM(l_extendedprice) AS s FROM lineitem",
+    "target": 95.0,
+    "trials": 40,
+    "empirical_coverage_pct": 100.0,
+    "rel_err_p50_pct": 0.18385967897505476,
+    "rel_err_p95_pct": 0.6173358046632064,
+    "reported_half_width_p50_pct": 0.8282437460801014,
+    "mean_latency_ms": 0.7566375508758938,
+    "exact_latency_ms": 1.3385409984039143,
+    "speedup": 1.7690649860747742,
+    "mean_sample_rate": 0.005,
+    "stop_reasons": {
+      "ci_within_target": 40
+    }
+  },
+  {
+    "query": "sum_ungrouped",
+    "sql": "SELECT SUM(l_extendedprice) AS s FROM lineitem",
+    "target": 99.0,
+    "trials": 40,
+    "empirical_coverage_pct": 100.0,
+    "rel_err_p50_pct": 0.32406617707738783,
+    "rel_err_p95_pct": 0.6819424952984555,
+    "reported_half_width_p50_pct": 0.8063015413496043,
+    "mean_latency_ms": 0.8129936730256304,
+    "exact_latency_ms": 1.3385409984039143,
+    "speedup": 1.6464347052325898,
+    "mean_sample_rate": 0.00519,
+    "stop_reasons": {
+      "ci_within_target": 40
+    }
+  },
+  {
+    "query": "sum_grouped",
+    "sql": "SELECT l_returnflag, SUM(l_extendedprice) AS s FROM lineitem GROUP BY l_returnflag",
+    "target": null,
+    "trials": 40,
+    "empirical_coverage_pct": 96.66666666666667,
+    "rel_err_p50_pct": 0.8031116992512952,
+    "rel_err_p95_pct": 2.4094567487489034,
+    "reported_half_width_p50_pct": 2.3340050611312786,
+    "mean_latency_ms": 1.3649500251631252,
+    "exact_latency_ms": 6.928707996848971,
+    "speedup": 5.076162400906158,
+    "mean_sample_rate": 0.01,
+    "stop_reasons": {
+      "ci_within_target": 40
+    }
+  },
+  {
+    "query": "sum_grouped",
+    "sql": "SELECT l_returnflag, SUM(l_extendedprice) AS s FROM lineitem GROUP BY l_returnflag",
+    "target": 95.0,
+    "trials": 40,
+    "empirical_coverage_pct": 94.16666666666667,
+    "rel_err_p50_pct": 0.6991792233389976,
+    "rel_err_p95_pct": 2.3209307426033976,
+    "reported_half_width_p50_pct": 2.331845663878888,
+    "mean_latency_ms": 1.3208062751800753,
+    "exact_latency_ms": 6.928707996848971,
+    "speedup": 5.245816988493887,
+    "mean_sample_rate": 0.01,
+    "stop_reasons": {
+      "ci_within_target": 40
+    }
+  },
+  {
+    "query": "sum_grouped",
+    "sql": "SELECT l_returnflag, SUM(l_extendedprice) AS s FROM lineitem GROUP BY l_returnflag",
+    "target": 99.0,
     "trials": 40,
     "empirical_coverage_pct": 95.0,
-    "rel_err_p50_pct": 0.34927621411312904,
-    "rel_err_p95_pct": 0.7518034320263873,
-    "reported_half_width_p50_pct": 0.8320263528938849,
-    "mean_latency_ms": 0.8047052509937203,
-    "exact_latency_ms": 1.3549579889513552,
-    "speedup": 1.6837941436049222,
-    "mean_sample_rate": 0.005,
-    "stop_reasons": {
-      "ci_within_target": 40
-    }
-  },
-  {
-    "query": "sum_ungrouped",
-    "sql": "SELECT SUM(l_extendedprice) AS s FROM lineitem",
-    "target": 95.0,
-    "trials": 40,
-    "empirical_coverage_pct": 100.0,
-    "rel_err_p50_pct": 0.30371954511260507,
-    "rel_err_p95_pct": 0.6746249191143615,
-    "reported_half_width_p50_pct": 0.8608296662314383,
-    "mean_latency_ms": 0.7172676494519692,
-    "exact_latency_ms": 1.3549579889513552,
-    "speedup": 1.8890549294766263,
-    "mean_sample_rate": 0.005,
-    "stop_reasons": {
-      "ci_within_target": 40
-    }
-  },
-  {
-    "query": "sum_ungrouped",
-    "sql": "SELECT SUM(l_extendedprice) AS s FROM lineitem",
-    "target": 99.0,
-    "trials": 40,
-    "empirical_coverage_pct": 100.0,
-    "rel_err_p50_pct": 0.22881053478516455,
-    "rel_err_p95_pct": 0.6376077128268692,
-    "reported_half_width_p50_pct": 0.8094127765479254,
-    "mean_latency_ms": 0.8684844258823432,
-    "exact_latency_ms": 1.3549579889513552,
-    "speedup": 1.560140802265712,
-    "mean_sample_rate": 0.0053175,
-    "stop_reasons": {
-      "ci_within_target": 40
-    }
-  },
-  {
-    "query": "sum_grouped",
-    "sql": "SELECT l_returnflag, SUM(l_extendedprice) AS s FROM lineitem GROUP BY l_returnflag",
-    "target": null,
-    "trials": 40,
-    "empirical_coverage_pct": 86.66666666666667,
-    "rel_err_p50_pct": 0.9288457794504826,
-    "rel_err_p95_pct": 2.6701459848147793,
-    "reported_half_width_p50_pct": 2.4283757365299357,
-    "mean_latency_ms": 1.3320896479854127,
-    "exact_latency_ms": 6.6650829976424575,
-    "speedup": 5.003479313665115,
-    "mean_sample_rate": 0.01,
-    "stop_reasons": {
-      "ci_within_target": 40
-    }
-  },
-  {
-    "query": "sum_grouped",
-    "sql": "SELECT l_returnflag, SUM(l_extendedprice) AS s FROM lineitem GROUP BY l_returnflag",
-    "target": 95.0,
-    "trials": 40,
-    "empirical_coverage_pct": 95.83333333333333,
-    "rel_err_p50_pct": 0.8227629977313695,
-    "rel_err_p95_pct": 2.3423893845966495,
-    "reported_half_width_p50_pct": 2.41930326056726,
-    "mean_latency_ms": 1.3029510253545595,
-    "exact_latency_ms": 6.6650829976424575,
-    "speedup": 5.115374920426309,
-    "mean_sample_rate": 0.01,
-    "stop_reasons": {
-      "ci_within_target": 40
-    }
-  },
-  {
-    "query": "sum_grouped",
-    "sql": "SELECT l_returnflag, SUM(l_extendedprice) AS s FROM lineitem GROUP BY l_returnflag",
-    "target": 99.0,
-    "trials": 40,
-    "empirical_coverage_pct": 98.33333333333333,
-    "rel_err_p50_pct": 0.27666742358734714,
-    "rel_err_p95_pct": 0.6724212998003226,
-    "reported_half_width_p50_pct": 0.8910394390601287,
-    "mean_latency_ms": 11.15591050038347,
-    "exact_latency_ms": 6.6650829976424575,
-    "speedup": 0.5974485899123477,
-    "mean_sample_rate": 0.06924999999999999,
+    "rel_err_p50_pct": 0.2462796429253817,
+    "rel_err_p95_pct": 0.8687779132698559,
+    "reported_half_width_p50_pct": 0.8847907464643765,
+    "mean_latency_ms": 19.25326974960626,
+    "exact_latency_ms": 6.928707996848971,
+    "speedup": 0.3598717561722557,
+    "mean_sample_rate": 0.06937499999999999,
     "stop_reasons": {
       "ci_within_target": 40
     }
@@ -158,12 +158,12 @@
     "target": null,
     "trials": 40,
     "empirical_coverage_pct": 100.0,
-    "rel_err_p50_pct": 0.27538211527172934,
-    "rel_err_p95_pct": 0.7507566205747496,
-    "reported_half_width_p50_pct": 1.3627969637169846,
-    "mean_latency_ms": 1.3206948242441285,
-    "exact_latency_ms": 6.926791989826597,
-    "speedup": 5.244808916239222,
+    "rel_err_p50_pct": 0.25216219372808163,
+    "rel_err_p95_pct": 0.8055634412146625,
+    "reported_half_width_p50_pct": 1.3838969386676427,
+    "mean_latency_ms": 2.871689627500018,
+    "exact_latency_ms": 9.900374992867,
+    "speedup": 3.4475783518032497,
     "mean_sample_rate": 0.01,
     "stop_reasons": {
       "ci_within_target": 40
@@ -175,12 +175,12 @@
     "target": 95.0,
     "trials": 40,
     "empirical_coverage_pct": 100.0,
-    "rel_err_p50_pct": 0.30825215941828854,
-    "rel_err_p95_pct": 0.8771169434842339,
-    "reported_half_width_p50_pct": 1.3931773657900108,
-    "mean_latency_ms": 1.3459791502100416,
-    "exact_latency_ms": 6.926791989826597,
-    "speedup": 5.146284761354337,
+    "rel_err_p50_pct": 0.2747341346378931,
+    "rel_err_p95_pct": 0.9877828987138926,
+    "reported_half_width_p50_pct": 1.4166164274041657,
+    "mean_latency_ms": 2.4882885758415796,
+    "exact_latency_ms": 9.900374992867,
+    "speedup": 3.9787889109761045,
     "mean_sample_rate": 0.01,
     "stop_reasons": {
       "ci_within_target": 40
@@ -192,13 +192,13 @@
     "target": 99.0,
     "trials": 40,
     "empirical_coverage_pct": 100.0,
-    "rel_err_p50_pct": 0.1669610289613928,
-    "rel_err_p95_pct": 0.5118110872005843,
-    "reported_half_width_p50_pct": 0.873590678068869,
-    "mean_latency_ms": 5.168742674140958,
-    "exact_latency_ms": 6.926791989826597,
-    "speedup": 1.3401309421885326,
-    "mean_sample_rate": 0.025052500000000002,
+    "rel_err_p50_pct": 0.15643357614038775,
+    "rel_err_p95_pct": 0.5643317621883214,
+    "reported_half_width_p50_pct": 0.8813936577541939,
+    "mean_latency_ms": 11.833552975440398,
+    "exact_latency_ms": 9.900374992867,
+    "speedup": 0.8366358787943439,
+    "mean_sample_rate": 0.0253325,
     "stop_reasons": {
       "ci_within_target": 40
     }
@@ -208,14 +208,14 @@
     "sql": "SELECT l_returnflag, SUM(l_extendedprice) AS s FROM lineitem WHERE l_quantity > 25 GROUP BY l_returnflag",
     "target": null,
     "trials": 40,
-    "empirical_coverage_pct": 95.83333333333333,
-    "rel_err_p50_pct": 0.9486416087776365,
-    "rel_err_p95_pct": 2.8500907387137056,
-    "reported_half_width_p50_pct": 3.1128503989172414,
-    "mean_latency_ms": 1.978219599550357,
-    "exact_latency_ms": 7.301167002879083,
-    "speedup": 3.6907767997742087,
-    "mean_sample_rate": 0.010125,
+    "empirical_coverage_pct": 96.66666666666667,
+    "rel_err_p50_pct": 1.0267542693822689,
+    "rel_err_p95_pct": 2.7235791735550423,
+    "reported_half_width_p50_pct": 3.1429701133848167,
+    "mean_latency_ms": 4.104918751545483,
+    "exact_latency_ms": 16.799124990939163,
+    "speedup": 4.092437879462137,
+    "mean_sample_rate": 0.0100625,
     "stop_reasons": {
       "ci_within_target": 40
     }
@@ -225,13 +225,13 @@
     "sql": "SELECT l_returnflag, SUM(l_extendedprice) AS s FROM lineitem WHERE l_quantity > 25 GROUP BY l_returnflag",
     "target": 95.0,
     "trials": 40,
-    "empirical_coverage_pct": 99.16666666666667,
-    "rel_err_p50_pct": 0.7768136256616145,
-    "rel_err_p95_pct": 2.2474773961371652,
-    "reported_half_width_p50_pct": 3.045731466180234,
-    "mean_latency_ms": 1.9357979250344215,
-    "exact_latency_ms": 7.301167002879083,
-    "speedup": 3.7716576242064406,
+    "empirical_coverage_pct": 96.66666666666667,
+    "rel_err_p50_pct": 0.8271915907121397,
+    "rel_err_p95_pct": 2.456285466158393,
+    "reported_half_width_p50_pct": 3.060690145922311,
+    "mean_latency_ms": 3.7036749999970198,
+    "exact_latency_ms": 16.799124990939163,
+    "speedup": 4.5357988999986985,
     "mean_sample_rate": 0.01,
     "stop_reasons": {
       "ci_within_target": 40
@@ -242,14 +242,14 @@
     "sql": "SELECT l_returnflag, SUM(l_extendedprice) AS s FROM lineitem WHERE l_quantity > 25 GROUP BY l_returnflag",
     "target": 99.0,
     "trials": 40,
-    "empirical_coverage_pct": 97.5,
-    "rel_err_p50_pct": 0.2186112026891206,
-    "rel_err_p95_pct": 0.6880120397240305,
-    "reported_half_width_p50_pct": 0.8754560833941879,
-    "mean_latency_ms": 29.57480309996754,
-    "exact_latency_ms": 7.301167002879083,
-    "speedup": 0.2468711956661208,
-    "mean_sample_rate": 0.11975,
+    "empirical_coverage_pct": 96.66666666666667,
+    "rel_err_p50_pct": 0.257948876770035,
+    "rel_err_p95_pct": 0.6617615011999982,
+    "reported_half_width_p50_pct": 0.8873623436975657,
+    "mean_latency_ms": 67.20144367682224,
+    "exact_latency_ms": 16.799124990939163,
+    "speedup": 0.24998160860542906,
+    "mean_sample_rate": 0.11587499999999999,
     "stop_reasons": {
       "ci_within_target": 40
     }
@@ -259,13 +259,13 @@
     "sql": "SELECT l_returnflag, COUNT(*) AS c, SUM(l_extendedprice) AS s, AVG(l_discount) AS a FROM lineitem GROUP BY l_returnflag",
     "target": null,
     "trials": 40,
-    "empirical_coverage_pct": 91.11111111111111,
-    "rel_err_p50_pct": 0.5189752667428064,
-    "rel_err_p95_pct": 2.271334681763621,
-    "reported_half_width_p50_pct": 1.792573804775378,
-    "mean_latency_ms": 2.8868718749436084,
-    "exact_latency_ms": 14.298499998403713,
-    "speedup": 4.952938896425051,
+    "empirical_coverage_pct": 96.66666666666667,
+    "rel_err_p50_pct": 0.4964064939792814,
+    "rel_err_p95_pct": 1.6492137020899826,
+    "reported_half_width_p50_pct": 1.8412481683635586,
+    "mean_latency_ms": 3.414864650039817,
+    "exact_latency_ms": 20.441166998352855,
+    "speedup": 5.985937685147935,
     "mean_sample_rate": 0.01,
     "stop_reasons": {
       "ci_within_target": 40
@@ -276,13 +276,13 @@
     "sql": "SELECT l_returnflag, COUNT(*) AS c, SUM(l_extendedprice) AS s, AVG(l_discount) AS a FROM lineitem GROUP BY l_returnflag",
     "target": 95.0,
     "trials": 40,
-    "empirical_coverage_pct": 93.05555555555556,
-    "rel_err_p50_pct": 0.5150628767391091,
-    "rel_err_p95_pct": 2.087170542565866,
-    "reported_half_width_p50_pct": 1.8932302565724133,
-    "mean_latency_ms": 11.234107200289145,
-    "exact_latency_ms": 14.298499998403713,
-    "speedup": 1.2727758195182344,
+    "empirical_coverage_pct": 95.0,
+    "rel_err_p50_pct": 0.543144798308202,
+    "rel_err_p95_pct": 2.0424003168436906,
+    "reported_half_width_p50_pct": 1.8935214488088796,
+    "mean_latency_ms": 3.100344900303753,
+    "exact_latency_ms": 20.441166998352855,
+    "speedup": 6.593191291830194,
     "mean_sample_rate": 0.01,
     "stop_reasons": {
       "ci_within_target": 40
@@ -293,14 +293,167 @@
     "sql": "SELECT l_returnflag, COUNT(*) AS c, SUM(l_extendedprice) AS s, AVG(l_discount) AS a FROM lineitem GROUP BY l_returnflag",
     "target": 99.0,
     "trials": 40,
-    "empirical_coverage_pct": 96.11111111111111,
-    "rel_err_p50_pct": 0.16895867078938334,
-    "rel_err_p95_pct": 0.578172240462608,
-    "reported_half_width_p50_pct": 0.5882288503706128,
-    "mean_latency_ms": 71.99517402514175,
-    "exact_latency_ms": 14.298499998403713,
-    "speedup": 0.19860358964352903,
-    "mean_sample_rate": 0.0895,
+    "empirical_coverage_pct": 95.55555555555556,
+    "rel_err_p50_pct": 0.15814838253513608,
+    "rel_err_p95_pct": 0.5646624901214903,
+    "reported_half_width_p50_pct": 0.5842199530178721,
+    "mean_latency_ms": 53.12493432647898,
+    "exact_latency_ms": 20.441166998352855,
+    "speedup": 0.3847753838664869,
+    "mean_sample_rate": 0.0905,
+    "stop_reasons": {
+      "ci_within_target": 40
+    }
+  },
+  {
+    "query": "join_count_1toN",
+    "sql": "SELECT c.c_mktsegment, COUNT(*) AS c FROM customer c JOIN orders o ON c.c_custkey = o.o_custkey GROUP BY c.c_mktsegment",
+    "target": null,
+    "trials": 40,
+    "empirical_coverage_pct": 83.5,
+    "rel_err_p50_pct": 0.8037838169883658,
+    "rel_err_p95_pct": 2.943626815232953,
+    "reported_half_width_p50_pct": 2.310989780005536,
+    "mean_latency_ms": 37.554508401444764,
+    "exact_latency_ms": 15.554249999695458,
+    "speedup": 0.41417796855242733,
+    "mean_sample_rate": 0.541875,
+    "stop_reasons": {
+      "ci_within_target": 40
+    }
+  },
+  {
+    "query": "join_count_1toN",
+    "sql": "SELECT c.c_mktsegment, COUNT(*) AS c FROM customer c JOIN orders o ON c.c_custkey = o.o_custkey GROUP BY c.c_mktsegment",
+    "target": 95.0,
+    "trials": 40,
+    "empirical_coverage_pct": 92.5,
+    "rel_err_p50_pct": 0.6939748437932328,
+    "rel_err_p95_pct": 2.6373038177395287,
+    "reported_half_width_p50_pct": 2.7188473529102453,
+    "mean_latency_ms": 30.786325001099613,
+    "exact_latency_ms": 15.554249999695458,
+    "speedup": 0.5052324367763901,
+    "mean_sample_rate": 0.4675,
+    "stop_reasons": {
+      "ci_within_target": 40
+    }
+  },
+  {
+    "query": "join_count_1toN",
+    "sql": "SELECT c.c_mktsegment, COUNT(*) AS c FROM customer c JOIN orders o ON c.c_custkey = o.o_custkey GROUP BY c.c_mktsegment",
+    "target": 99.0,
+    "trials": 40,
+    "empirical_coverage_pct": 99.0,
+    "rel_err_p50_pct": 0.0,
+    "rel_err_p95_pct": 0.0,
+    "reported_half_width_p50_pct": 0.0,
+    "mean_latency_ms": 48.4110437992058,
+    "exact_latency_ms": 15.554249999695458,
+    "speedup": 0.3212954891906427,
+    "mean_sample_rate": 0.995,
+    "stop_reasons": {
+      "ci_within_target": 40
+    }
+  },
+  {
+    "query": "join_sum_star",
+    "sql": "SELECT n.n_name, SUM(l.l_extendedprice) AS s FROM lineitem l JOIN orders o ON l.l_orderkey = o.o_orderkey JOIN customer c ON o.o_custkey = c.c_custkey JOIN nation n ON c.c_nationkey = n.n_nationkey GROUP BY n.n_name",
+    "target": null,
+    "trials": 40,
+    "empirical_coverage_pct": 99.8,
+    "rel_err_p50_pct": 0.6992738054877151,
+    "rel_err_p95_pct": 2.1784568449214747,
+    "reported_half_width_p50_pct": 3.4155770379154156,
+    "mean_latency_ms": 231.7165551994549,
+    "exact_latency_ms": 102.98000001057517,
+    "speedup": 0.444422281014548,
+    "mean_sample_rate": 0.1512475,
+    "stop_reasons": {
+      "ci_within_target": 40
+    }
+  },
+  {
+    "query": "join_sum_star",
+    "sql": "SELECT n.n_name, SUM(l.l_extendedprice) AS s FROM lineitem l JOIN orders o ON l.l_orderkey = o.o_orderkey JOIN customer c ON o.o_custkey = c.c_custkey JOIN nation n ON c.c_nationkey = n.n_nationkey GROUP BY n.n_name",
+    "target": 95.0,
+    "trials": 40,
+    "empirical_coverage_pct": 99.8,
+    "rel_err_p50_pct": 0.8863463939335767,
+    "rel_err_p95_pct": 2.701354138832629,
+    "reported_half_width_p50_pct": 4.3406779433307126,
+    "mean_latency_ms": 149.9223926493869,
+    "exact_latency_ms": 102.98000001057517,
+    "speedup": 0.6868887174940395,
+    "mean_sample_rate": 0.10187500000000001,
+    "stop_reasons": {
+      "ci_within_target": 40
+    }
+  },
+  {
+    "query": "join_sum_star",
+    "sql": "SELECT n.n_name, SUM(l.l_extendedprice) AS s FROM lineitem l JOIN orders o ON l.l_orderkey = o.o_orderkey JOIN customer c ON o.o_custkey = c.c_custkey JOIN nation n ON c.c_nationkey = n.n_nationkey GROUP BY n.n_name",
+    "target": 99.0,
+    "trials": 40,
+    "empirical_coverage_pct": 99.7,
+    "rel_err_p50_pct": 0.1697434860427699,
+    "rel_err_p95_pct": 0.4628629374595438,
+    "reported_half_width_p50_pct": 0.7155799384270705,
+    "mean_latency_ms": 654.5711770755588,
+    "exact_latency_ms": 102.98000001057517,
+    "speedup": 0.15732437298975038,
+    "mean_sample_rate": 0.8,
+    "stop_reasons": {
+      "ci_within_target": 40
+    }
+  },
+  {
+    "query": "join_count_fact",
+    "sql": "SELECT l.l_shipmode, COUNT(*) AS c FROM lineitem l JOIN orders o ON l.l_orderkey = o.o_orderkey GROUP BY l.l_shipmode",
+    "target": null,
+    "trials": 40,
+    "empirical_coverage_pct": 99.64285714285714,
+    "rel_err_p50_pct": 0.2931904730122036,
+    "rel_err_p95_pct": 0.8370011015104292,
+    "reported_half_width_p50_pct": 1.2098119641258336,
+    "mean_latency_ms": 105.67041042340861,
+    "exact_latency_ms": 36.27700000652112,
+    "speedup": 0.3433032942823213,
+    "mean_sample_rate": 0.05,
+    "stop_reasons": {
+      "ci_within_target": 40
+    }
+  },
+  {
+    "query": "join_count_fact",
+    "sql": "SELECT l.l_shipmode, COUNT(*) AS c FROM lineitem l JOIN orders o ON l.l_orderkey = o.o_orderkey GROUP BY l.l_shipmode",
+    "target": 95.0,
+    "trials": 40,
+    "empirical_coverage_pct": 98.21428571428571,
+    "rel_err_p50_pct": 0.27781312239251277,
+    "rel_err_p95_pct": 0.8864388157017811,
+    "reported_half_width_p50_pct": 1.1964780807005038,
+    "mean_latency_ms": 102.28257175076578,
+    "exact_latency_ms": 36.27700000652112,
+    "speedup": 0.3546743045816065,
+    "mean_sample_rate": 0.05,
+    "stop_reasons": {
+      "ci_within_target": 40
+    }
+  },
+  {
+    "query": "join_count_fact",
+    "sql": "SELECT l.l_shipmode, COUNT(*) AS c FROM lineitem l JOIN orders o ON l.l_orderkey = o.o_orderkey GROUP BY l.l_shipmode",
+    "target": 99.0,
+    "trials": 40,
+    "empirical_coverage_pct": 99.28571428571429,
+    "rel_err_p50_pct": 0.23126932959476346,
+    "rel_err_p95_pct": 0.5865035368503938,
+    "reported_half_width_p50_pct": 0.8567035384905586,
+    "mean_latency_ms": 149.09351457499724,
+    "exact_latency_ms": 36.27700000652112,
+    "speedup": 0.24331708934443966,
+    "mean_sample_rate": 0.0965925,
     "stop_reasons": {
       "ci_within_target": 40
     }

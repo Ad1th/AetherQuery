@@ -12,7 +12,11 @@ from backend.core.join_sampling import (
     estimate_join_complexity_multiplier,
     hll_guided_join_min_rate,
 )
-from backend.core.sufficient_stats import evaluate_sample_accuracy
+from backend.core.sufficient_stats import (
+    evaluate_sample_accuracy,
+    evaluate_join_sample_accuracy,
+    join_ci_is_defensible,
+)
 
 
 MODE_CONFIGS: dict[str, dict[str, Any]] = {
@@ -246,16 +250,16 @@ def run_runtime_sampling(
     # over the whole result grid is inside the error budget, not when two
     # consecutive samples happen to agree (stability is not accuracy).
     #
-    # Non-JOIN aggregates only. Extending this to joins was tried and measured
-    # to under-cover badly (interval coverage 0-60% vs a nominal 95%): a 1:N
-    # join sample is cluster-sampled, its true design effect is large, and a
-    # simple 1/f expansion with SRS variance is wildly optimistic. Doing it
-    # properly needs backend.stats.design_effect's ClusterSampleStats and
-    # block-level aggregates; until then joins keep the completeness heuristic.
-    # join_ci_is_defensible / build_sufficient_stats_sql's join branch remain as
-    # scaffolding for that work.
-    ci_join = False
-    use_ci_stop = (not parsed.has_joins) and bool(getattr(parsed, "aggregates", None))
+    # Non-JOIN aggregates use the single-table estimators. INNER equi-joins that
+    # are fact -> dimension in shape (join_ci_is_defensible) use the cluster
+    # estimator: the sampled fact table's physical row group is the sampling
+    # unit, so the between-block variance absorbs the 1:N fan-out. A naive 1/f
+    # expansion here was measured to under-cover at 0-60%; the cluster path
+    # measures 95-100%. Other joins keep the group-completeness heuristic.
+    ci_join = parsed.has_joins and join_ci_is_defensible(parsed)
+    use_ci_stop = bool(getattr(parsed, "aggregates", None)) and (
+        not parsed.has_joins or ci_join
+    )
     if accuracy_target is not None:
         ci_target_error = max(0.005, min(0.5, 1.0 - float(accuracy_target) / 100.0))
     else:
@@ -375,7 +379,8 @@ def run_runtime_sampling(
             rows_sampled = None
             frame_length = 1
         elif use_ci_stop:
-            _estimate_set, ci_met, ci_detail = evaluate_sample_accuracy(
+            _evaluator = evaluate_join_sample_accuracy if ci_join else evaluate_sample_accuracy
+            _estimate_set, ci_met, ci_detail = _evaluator(
                 parsed,
                 source,
                 sample_fraction,

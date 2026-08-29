@@ -48,6 +48,23 @@ QUERIES = {
         "SELECT l_returnflag, COUNT(*) AS c, SUM(l_extendedprice) AS s, "
         "AVG(l_discount) AS a FROM lineitem GROUP BY l_returnflag"
     ),
+    # INNER fact -> dimension joins: the cluster-estimator path.
+    "join_count_1toN": (
+        "SELECT c.c_mktsegment, COUNT(*) AS c "
+        "FROM customer c JOIN orders o ON c.c_custkey = o.o_custkey "
+        "GROUP BY c.c_mktsegment"
+    ),
+    "join_sum_star": (
+        "SELECT n.n_name, SUM(l.l_extendedprice) AS s "
+        "FROM lineitem l JOIN orders o ON l.l_orderkey = o.o_orderkey "
+        "JOIN customer c ON o.o_custkey = c.c_custkey "
+        "JOIN nation n ON c.c_nationkey = n.n_nationkey GROUP BY n.n_name"
+    ),
+    "join_count_fact": (
+        "SELECT l.l_shipmode, COUNT(*) AS c "
+        "FROM lineitem l JOIN orders o ON l.l_orderkey = o.o_orderkey "
+        "GROUP BY l.l_shipmode"
+    ),
 }
 TARGETS = [None, 95.0, 99.0]  # None -> mode default error budget
 

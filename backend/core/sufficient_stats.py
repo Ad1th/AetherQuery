@@ -14,14 +14,19 @@ sample, exactly the sufficient statistics `backend.stats` needs:
 plus the sampled relation's true row count (cached), so the *realized*
 sampling fraction n/N is used rather than the nominal TABLESAMPLE percentage.
 
-JOINs are out of scope here for the same reason `backend.stats` excludes them:
-scaling a one-sided join sample by 1/f is not unbiased in general and join-key
-multiplicity adds variance these formulas do not model. `run_runtime_sampling`
-keeps its group-completeness heuristic for joins.
+For an INNER fact->dimension join we can still form an honest interval by
+treating the physical row group of the sampled (fact) table as the sampling
+unit: `evaluate_join_sample_accuracy` groups the joined result by
+`fact.rowid // 2048`, builds `backend.stats.design_effect.ClusterSampleStats`
+per output group, and calls `estimate_clustered`. The between-block variance
+absorbs the 1:N fan-out that makes a naive 1/f expansion under-cover. Other
+join shapes (LEFT/RIGHT/FULL, non-equi) keep `run_runtime_sampling`'s
+group-completeness heuristic.
 """
 
 from __future__ import annotations
 
+import math
 import re
 import time
 from dataclasses import replace
@@ -36,8 +41,15 @@ from backend.stats import (
     EstimateSet,
     Method,
     SampleStats,
+    adjust_coverage_level,
     estimate_query,
     recommend_method,
+)
+from backend.stats.design_effect import (
+    DUCKDB_VECTOR_SIZE,
+    BlockAggregate,
+    ClusterSampleStats,
+    estimate_clustered,
 )
 
 _AGG_BY_FUNC = {
@@ -107,6 +119,26 @@ def join_ci_is_defensible(parsed: ParsedQuery) -> bool:
         if "=" not in join.on_condition:
             return False
     return True
+
+
+_SQL_KEYWORDS_AFTER_TABLE = {
+    "join", "inner", "left", "right", "full", "cross", "natural", "on", "where",
+    "group", "order", "limit", "using",
+}
+
+
+def _fact_alias(parsed: ParsedQuery) -> str:
+    """The alias (or bare name) of the first table in FROM -- the sampled side."""
+    from_match = re.search(
+        r"(?is)\bFROM\s+([a-zA-Z_][a-zA-Z0-9_]*)(?:\s+(?:AS\s+)?([a-zA-Z_][a-zA-Z0-9_]*))?",
+        parsed.raw_sql,
+    )
+    if not from_match:
+        return parsed.table
+    table, alias = from_match.group(1), from_match.group(2)
+    if alias and alias.lower() not in _SQL_KEYWORDS_AFTER_TABLE:
+        return alias
+    return table
 
 
 def _join_from_clause(parsed: ParsedQuery, source: str, sample_fraction: float) -> str:
@@ -358,6 +390,173 @@ def evaluate_sample_accuracy(
         "rows": rows,
         "result_map": result_map,
         "n_sample": n_sample,
+        "sample_query": sql,
+        "query_time": query_time,
+        "max_relative_half_width": estimate_set.max_relative_half_width,
+        "unresolved_cells": len(estimate_set.unresolved),
+        "ci": estimate_set.to_dict(),
+    }
+    return estimate_set, bool(met), detail
+
+
+def build_join_block_stats_sql(
+    parsed: ParsedQuery, source: str, sample_fraction: float
+) -> str:
+    """
+    Sampled join, grouped by the fact table's physical row group as well as the
+    query's GROUP BY, returning per (block, group): row count, in-domain count,
+    and SUM / SUM(x^2) of each aggregate's column.
+    """
+    fact = _fact_alias(parsed)
+    where = parsed.where_clause
+    filt = f" FILTER (WHERE {where})" if where else ""
+
+    select_parts: list[str] = [f"({fact}.rowid // {DUCKDB_VECTOR_SIZE}) AS __aqp_blk"]
+    select_parts += [
+        f"{expr} AS __aqp_grp_{i}" for i, expr in enumerate(parsed.group_by)
+    ]
+    select_parts.append("COUNT(*) AS __aqp_n_rows")
+    select_parts.append(f"COUNT(*){filt} AS __aqp_n_domain")
+    for agg in parsed.aggregates:
+        if agg.is_count_star:
+            continue
+        col = _col_expr(agg.expression)
+        select_parts.append(f"SUM({col}){filt} AS __aqp_sum__{agg.alias}")
+        select_parts.append(f"SUM({col} * {col}){filt} AS __aqp_sumxx__{agg.alias}")
+
+    sql = (
+        f"SELECT {', '.join(select_parts)} "
+        f"FROM {_join_from_clause(parsed, source, sample_fraction)}"
+    )
+    if source == "mysql":
+        sql += f" WHERE (RAND() < {sample_fraction:.8f})"
+    group_keys = ["__aqp_blk"] + [f"__aqp_grp_{i}" for i in range(len(parsed.group_by))]
+    sql += f" GROUP BY {', '.join(group_keys)}"
+    return sql
+
+
+def evaluate_join_sample_accuracy(
+    parsed: ParsedQuery,
+    source: str,
+    sample_fraction: float,
+    *,
+    coverage_level: float = 0.95,
+    target_relative_error: float = 0.05,
+) -> tuple[EstimateSet, bool, dict[str, Any]]:
+    """
+    Confidence intervals for an INNER fact->dimension join, using the fact
+    table's physical row group as the sampling unit (cluster sampling). The
+    between-block variance absorbs the 1:N fan-out; degrees of freedom come
+    from the block count, not the row count, so these intervals are wide and
+    honest where a 1/f expansion with SRS variance would badly under-cover.
+
+    Requires DuckDB (needs `rowid` and SYSTEM block sampling).
+    """
+    fact_pop = _population_size(parsed.table, source)
+    if fact_pop is None or source != "duckdb":
+        # Fall back to the single-table path's shape; caller keeps the heuristic.
+        return evaluate_sample_accuracy(
+            parsed, source, sample_fraction,
+            coverage_level=coverage_level,
+            target_relative_error=target_relative_error,
+        )
+
+    total_blocks = max(1, math.ceil(fact_pop / DUCKDB_VECTOR_SIZE))
+    sql = build_join_block_stats_sql(parsed, source, sample_fraction)
+    start = time.perf_counter()
+    payload = _execute_source_query(sql, source)
+    query_time = float(payload.get("time", time.perf_counter() - start))
+    cols = payload.get("columns", [])
+    raw = [dict(zip(cols, r)) for r in payload.get("rows", [])]
+
+    ngrp = len(parsed.group_by)
+    non_count = [a for a in parsed.aggregates if not a.is_count_star]
+
+    # blocks[group_key][alias] -> list[BlockAggregate]
+    blocks: dict[tuple, dict[str, list[BlockAggregate]]] = {}
+    n_sample = 0
+    for row in raw:
+        n_sample += int(row.get("__aqp_n_rows") or 0)
+        gk = tuple(row.get(f"__aqp_grp_{i}") for i in range(ngrp))
+        n_dom = int(row.get("__aqp_n_domain") or 0)
+        per_alias = blocks.setdefault(gk, {})
+        for agg in parsed.aggregates:
+            sx = 0.0 if agg.is_count_star else float(row.get(f"__aqp_sum__{agg.alias}") or 0.0)
+            sxx = 0.0 if agg.is_count_star else float(row.get(f"__aqp_sumxx__{agg.alias}") or 0.0)
+            per_alias.setdefault(agg.alias, []).append(
+                BlockAggregate(
+                    block_id=row.get("__aqp_blk"),
+                    n_rows=int(row.get("__aqp_n_rows") or 0),
+                    n_domain=n_dom,
+                    sum_x=sx,
+                    sum_xx=sxx,
+                )
+            )
+    n_sample = max(n_sample, 1)
+
+    # The "population" for these clusters is the full joined result, not the
+    # fact table (1:N fan-out makes the join larger). Estimate its size by
+    # expanding the sampled joined rows by the block-sampling fraction.
+    all_blocks_sampled = len(
+        {b.block_id for pa in blocks.values() for lst in pa.values() for b in lst}
+    )
+    block_fraction = max(1e-9, all_blocks_sampled / total_blocks)
+    join_size_est = max(n_sample, round(n_sample / block_fraction))
+
+    num_intervals = max(1, len(blocks) * max(1, len(parsed.aggregates)))
+    per_interval = adjust_coverage_level(
+        coverage_level, num_intervals, Correction.BONFERRONI
+    )
+
+    estimates: dict[Any, dict[str, Any]] = {}
+    for gk, per_alias in blocks.items():
+        key = gk if ngrp else None
+        for agg in parsed.aggregates:
+            aggregate = _AGG_BY_FUNC.get(agg.func.lower(), Aggregate.SUM)
+            group_blocks = tuple(per_alias[agg.alias])
+            group_rows = sum(b.n_rows for b in group_blocks)
+            cluster = ClusterSampleStats(
+                blocks=group_blocks,
+                total_blocks=total_blocks,
+                population_size=max(join_size_est, group_rows + 1),
+            )
+            estimates.setdefault(key, {})[agg.alias] = estimate_clustered(
+                aggregate, cluster, coverage_level=per_interval
+            )
+
+    estimate_set = EstimateSet(
+        estimates=estimates,
+        per_interval_coverage=per_interval,
+        family_wise_coverage=coverage_level,
+        correction=Correction.BONFERRONI,
+        num_intervals=num_intervals,
+        notes=(
+            "cluster estimator: the sampled fact table's row group is the "
+            "sampling unit, so the interval rests on the block count",
+        ),
+    )
+    met = estimate_set.meets_target(target_relative_error)
+
+    columns = list(parsed.group_by) + [a.alias for a in parsed.aggregates]
+    result_map: dict[str, Any] = {}
+    for gk, by_alias_est in estimate_set.estimates.items():
+        row: dict[str, Any] = {}
+        if ngrp and isinstance(gk, tuple):
+            for col, val in zip(parsed.group_by, gk):
+                row[col] = val
+        for agg in parsed.aggregates:
+            est = by_alias_est.get(agg.alias)
+            row[agg.alias] = est.estimate if est is not None else None
+        key = str(tuple(row.get(c) for c in parsed.group_by)) if ngrp else "row_0"
+        result_map[key] = row
+    rows = [[entry.get(col) for col in columns] for entry in result_map.values()]
+
+    detail = {
+        "columns": columns,
+        "rows": rows,
+        "result_map": result_map,
+        "n_sample": n_sample,
+        "blocks_sampled": len({b.block_id for pa in blocks.values() for lst in pa.values() for b in lst}),
         "sample_query": sql,
         "query_time": query_time,
         "max_relative_half_width": estimate_set.max_relative_half_width,
