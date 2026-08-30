@@ -15,6 +15,7 @@ from backend.core.join_sampling import (
 from backend.core.sufficient_stats import (
     evaluate_sample_accuracy,
     evaluate_join_sample_accuracy,
+    expected_group_count,
     join_ci_is_defensible,
 )
 from backend.stats.sequential import Schedule, alpha_for_look
@@ -350,6 +351,24 @@ def run_runtime_sampling(
     # you cannot sample your way to hundreds of thousands of distinct group
     # keys -- so stop early and hand back a labelled best-effort result.
     aqp_group_ceiling = 50_000
+    # Result-grid completeness for single-table grouped queries. The family-wise
+    # certificate is over the groups in the grid; a group absent from the sample
+    # is silently absent from the grid. `expected_group_count` returns the exact
+    # population group count when it is cheap (no predicate, or only IS NOT NULL
+    # on the grouping columns) -- then the grid is certified only once every
+    # group has been observed. When it cannot be had cheaply (a predicate on a
+    # non-grouping column), fall back to requiring the discovered group set to be
+    # non-decreasing and unchanged for a full look before certifying, and label
+    # the result `groups_incomplete` if that never holds within the budget.
+    single_table_grid = bool(
+        use_ci_stop and not ci_join and getattr(parsed, "group_by", None)
+    )
+    expected_groups: int | None = None
+    if single_table_grid:
+        try:
+            expected_groups = expected_group_count(parsed, source)
+        except Exception:
+            expected_groups = None
 
     progression = list(config["progression"])
     position = 0
@@ -472,17 +491,33 @@ def run_runtime_sampling(
         # sample already produced is not "converged", it is under-sampled.
         groups_returned = len(aggregate_payload.get("result_map", {}))
         max_groups_seen = max(max_groups_seen, groups_returned)
-        # Under-sampled if there are no groups at all, if a bigger sample
-        # already produced more of them, or if the set is still growing
-        # look-to-look (it has not stabilised yet).
-        groups_incomplete = bool(
-            parsed.has_joins
-            and (
-                groups_returned == 0
-                or groups_returned < max_groups_seen
-                or (previous_groups_returned is not None and groups_returned > previous_groups_returned)
+        # Result-grid completeness. A tight interval on the groups a sample
+        # returned says nothing about groups it missed.
+        if single_table_grid:
+            if groups_returned == 0:
+                groups_incomplete = True
+            elif expected_groups is not None:
+                # exact population group count known: complete only once every
+                # group has been observed
+                groups_incomplete = groups_returned < expected_groups
+            else:
+                # no cheap exact count: require the discovered group set to be
+                # non-decreasing and unchanged since the previous look
+                groups_incomplete = (
+                    groups_returned < max_groups_seen
+                    or previous_groups_returned is None
+                    or groups_returned != previous_groups_returned
+                )
+        else:
+            # JOIN queries: a small fact sample can miss whole dimension groups.
+            groups_incomplete = bool(
+                parsed.has_joins
+                and (
+                    groups_returned == 0
+                    or groups_returned < max_groups_seen
+                    or (previous_groups_returned is not None and groups_returned > previous_groups_returned)
+                )
             )
-        )
         # Keep chasing missing groups only for a bounded number of iterations.
         completeness_blocks_stop = (
             groups_incomplete and len(iteration_details) < max_incomplete_iterations
@@ -539,6 +574,16 @@ def run_runtime_sampling(
                 stop_reason = "time_budget_exceeded"
                 break
             if ci_join and groups_incomplete and groups_returned >= aqp_group_ceiling:
+                stop_reason = "groups_incomplete"
+                break
+            # Single-table grid whose group set never settled within the budget:
+            # hand back a labelled best-effort result rather than grind to a
+            # full scan.
+            if (
+                single_table_grid
+                and groups_incomplete
+                and len(iteration_details) >= max_incomplete_iterations
+            ):
                 stop_reason = "groups_incomplete"
                 break
             # Grow the next sample in proportion to how far the widest interval

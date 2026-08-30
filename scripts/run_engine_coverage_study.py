@@ -142,7 +142,10 @@ def _approx_cells(payload, parsed):
     return cells
 
 
-_EXACT_FALLBACKS = {"progression_exhausted", "full_scan", "census"}
+# The engine "declined to certify" -- it returned the exact answer, or a
+# best-effort result labelled incomplete. Such trials are reported as the
+# decline rate, not scored as interval coverage.
+_EXACT_FALLBACKS = {"progression_exhausted", "full_scan", "census", "groups_incomplete"}
 
 
 def _measure(run_approx, parse, con, qname, sql, trials, target, cov_level,
@@ -259,8 +262,38 @@ def run(database: str, trials: int, out_path: str, multiplicity: bool = True,
                   f"{rec['mean_signed_rel_error_pct']:8.3f} {rec['rel_err_p95_pct']:8.3f} "
                   f"{rec['reported_half_width_p50_pct']:8.3f} {rec['speedup']:8.2f}")
 
+    import platform, subprocess
+    try:
+        sha = subprocess.check_output(
+            ["git", "-C", str(PROJECT_ROOT), "rev-parse", "HEAD"], text=True
+        ).strip()
+    except Exception:
+        sha = "unknown"
+    try:
+        import duckdb as _dk
+        duckdb_version = _dk.__version__
+    except Exception:
+        duckdb_version = "unknown"
+    payload = {
+        "provenance": {
+            "generated_utc": __import__("datetime").datetime.now(
+                __import__("datetime").timezone.utc
+            ).isoformat(),
+            "engine_git_sha": sha,
+            "duckdb_version": duckdb_version,
+            "python_version": platform.python_version(),
+            "host": platform.platform(),
+            "database": str(Path(database).resolve()),
+            "queryset": queryset,
+            "trials": trials,
+            "multiplicity_correction": multiplicity,
+            "anytime_valid": anytime_valid,
+            "coverage_sweep": coverage_sweep,
+        },
+        "records": records,
+    }
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
-    Path(out_path).write_text(json.dumps(records, indent=2), encoding="utf-8")
+    Path(out_path).write_text(json.dumps(payload, indent=2), encoding="utf-8")
     print(f"\nWritten: {out_path}")
     print("Interpretation: empirical_coverage_pct should be >= ~93 for a nominal "
           "95% interval; values well below that mean the CLT interval is "
