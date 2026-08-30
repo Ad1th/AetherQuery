@@ -234,6 +234,7 @@ def run_runtime_sampling(
     mode: str,
     accuracy_target: float | None = None,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    ci_multiplicity_correction: bool = True,
 ) -> dict[str, Any]:
     mode_key = mode if mode in MODE_CONFIGS else "balanced"
     config = _derive_accuracy_config(mode_key, accuracy_target)
@@ -387,6 +388,7 @@ def run_runtime_sampling(
                     sample_fraction,
                     coverage_level=0.95,
                     target_relative_error=ci_target_error,
+                    multiplicity_correction=ci_multiplicity_correction,
                 )
             except Exception:
                 # Never let the interval layer fail the query: fall back to the

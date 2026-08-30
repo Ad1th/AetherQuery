@@ -282,7 +282,8 @@ def _patch_engine_ci(monkeypatch, sequence):
     """sequence: list of (ci_met, max_rel_hw) the engine 'sees' per iteration."""
     calls = {"fractions": []}
 
-    def fake_eval(parsed, source, sample_fraction, *, coverage_level, target_relative_error):
+    def fake_eval(parsed, source, sample_fraction, *, coverage_level,
+                  target_relative_error, multiplicity_correction=True):
         calls["fractions"].append(round(sample_fraction, 4))
         i = min(len(calls["fractions"]) - 1, len(sequence) - 1)
         met, hw = sequence[i]

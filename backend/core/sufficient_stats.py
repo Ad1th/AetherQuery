@@ -417,6 +417,7 @@ def evaluate_sample_accuracy(
     coverage_level: float = 0.95,
     target_relative_error: float = 0.05,
     design_effect: float = SYSTEM_SAMPLING_DESIGN_EFFECT,
+    multiplicity_correction: bool = True,
 ) -> tuple[EstimateSet, bool, dict[str, Any]]:
     """
     Take one sample, form a family of confidence intervals over the result grid,
@@ -470,7 +471,11 @@ def evaluate_sample_accuracy(
         agg_cells,
         coverage_level=coverage_level,
         method=grid_method,
-        correction=Correction.BONFERRONI if len(agg_cells) > 1 else Correction.NONE,
+        correction=(
+            Correction.BONFERRONI
+            if (multiplicity_correction and len(agg_cells) > 1)
+            else Correction.NONE
+        ),
     )
     met = estimate_set.meets_target(target_relative_error)
 
@@ -549,6 +554,7 @@ def evaluate_join_sample_accuracy(
     *,
     coverage_level: float = 0.95,
     target_relative_error: float = 0.05,
+    multiplicity_correction: bool = True,
 ) -> tuple[EstimateSet, bool, dict[str, Any]]:
     """
     Confidence intervals for an INNER fact->dimension join, using the fact
@@ -566,8 +572,10 @@ def evaluate_join_sample_accuracy(
             parsed, source, sample_fraction,
             coverage_level=coverage_level,
             target_relative_error=target_relative_error,
+            multiplicity_correction=multiplicity_correction,
         )
 
+    _corr = Correction.BONFERRONI if multiplicity_correction else Correction.NONE
     total_blocks = max(1, math.ceil(fact_pop / DUCKDB_VECTOR_SIZE))
     sql = build_join_block_stats_sql(parsed, source, sample_fraction)
     start = time.perf_counter()
@@ -581,6 +589,7 @@ def evaluate_join_sample_accuracy(
             parsed, source, sample_fraction,
             coverage_level=coverage_level,
             target_relative_error=target_relative_error,
+            multiplicity_correction=multiplicity_correction,
         )
     query_time = float(payload.get("time", time.perf_counter() - start))
     cols = payload.get("columns", [])
@@ -590,7 +599,7 @@ def evaluate_join_sample_accuracy(
         # Empty sample: no interval, keep sampling.
         empty = EstimateSet(
             estimates={}, per_interval_coverage=coverage_level,
-            family_wise_coverage=coverage_level, correction=Correction.BONFERRONI,
+            family_wise_coverage=coverage_level, correction=_corr,
             num_intervals=0, notes=("join sample returned no rows",),
         )
         return empty, False, {
@@ -638,9 +647,7 @@ def evaluate_join_sample_accuracy(
     join_size_est = max(n_sample, round(n_sample / block_fraction))
 
     num_intervals = max(1, len(group_keys) * max(1, len(parsed.aggregates)))
-    per_interval = adjust_coverage_level(
-        coverage_level, num_intervals, Correction.BONFERRONI
-    )
+    per_interval = adjust_coverage_level(coverage_level, num_intervals, _corr)
 
     # blocks[group_key][alias] -> BlockAggregate for EVERY sampled block (zeros
     # where the group is absent), so blocks_sampled is the same for every group.
@@ -684,7 +691,7 @@ def evaluate_join_sample_accuracy(
         estimates=estimates,
         per_interval_coverage=per_interval,
         family_wise_coverage=coverage_level,
-        correction=Correction.BONFERRONI,
+        correction=_corr,
         num_intervals=num_intervals,
         notes=(
             "cluster estimator: the sampled fact table's row group is the "
