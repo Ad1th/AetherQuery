@@ -31,6 +31,7 @@ group-completeness heuristic.
 from __future__ import annotations
 
 import math
+import os
 import re
 import time
 from dataclasses import replace
@@ -161,10 +162,28 @@ def expected_group_count(parsed: ParsedQuery, source: str) -> int | None:
     return _GROUP_COUNT_CACHE[key]
 
 
+def tablesample_method() -> str:
+    """
+    Which TABLESAMPLE method the single-table path uses on DuckDB.
+
+    ``SYSTEM`` (the default) draws whole physical row groups, which is what
+    makes it fast and what gives it a design effect (Section on block
+    sampling). ``BERNOULLI`` draws rows independently, which is the design the
+    SRS variance formula actually assumes, at the cost of scanning every row.
+    Set ``AETHERQUERY_TABLESAMPLE=BERNOULLI`` to trade the block-skipping
+    speedup for a sampling design that matches the variance model; this is the
+    remedy measured on a physically clustered table in the evaluation. The
+    default is unchanged.
+    """
+    method = os.environ.get("AETHERQUERY_TABLESAMPLE", "SYSTEM").strip().upper()
+    return method if method in ("SYSTEM", "BERNOULLI") else "SYSTEM"
+
+
 def _tablesample_from(table: str, source: str, sample_fraction: float) -> str:
     percent = sample_fraction * 100.0
     if source == "duckdb":
-        return f"{table} TABLESAMPLE SYSTEM ({percent:.4f} PERCENT)"
+        return (f"{table} TABLESAMPLE {tablesample_method()} "
+                f"({percent:.4f} PERCENT)")
     if source == "postgres":
         return f"{table} TABLESAMPLE SYSTEM ({percent:.4f})"
     # mysql: no TABLESAMPLE; caller handles the RAND() predicate

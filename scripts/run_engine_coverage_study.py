@@ -105,7 +105,51 @@ QUERIES_TPCDS = {
     ),
 }
 
-QUERY_SETS = {"tpch": QUERIES, "tpcds": QUERIES_TPCDS}
+# NYC TLC yellow-taxi trips, one month (2024-01), 2.96M rows. A real fact
+# table rather than a generator's: heavy right tails (sample skewness ~18 on
+# fare_amount and ~1000 on trip_distance), ~4.7% nulls on several columns,
+# refunds that make some column values negative, and a 260-value pickup-zone
+# key. The last two queries are the high-cardinality grouping test: one where
+# the exact population group count is cheap to read, and one where a predicate
+# on a non-grouping column forces the stability branch of the completeness
+# condition instead.
+QUERIES_TAXI = {
+    "count_star": "SELECT COUNT(*) AS cnt FROM trips",
+    "sum_ungrouped": "SELECT SUM(total_amount) AS s FROM trips",
+    "count_grouped": (
+        "SELECT payment_type, COUNT(*) AS c FROM trips GROUP BY payment_type"
+    ),
+    "sum_grouped": (
+        "SELECT payment_type, SUM(total_amount) AS s FROM trips "
+        "GROUP BY payment_type"
+    ),
+    "avg_grouped": (
+        "SELECT payment_type, AVG(trip_distance) AS d FROM trips "
+        "GROUP BY payment_type"
+    ),
+    "sum_filtered": (
+        "SELECT payment_type, SUM(total_amount) AS s FROM trips "
+        "WHERE trip_distance > 2 GROUP BY payment_type"
+    ),
+    "multi_agg": (
+        "SELECT payment_type, COUNT(*) AS c, SUM(total_amount) AS s, "
+        "AVG(fare_amount) AS f FROM trips GROUP BY payment_type"
+    ),
+    "sum_highcard": (
+        "SELECT PULocationID, SUM(total_amount) AS s FROM trips "
+        "GROUP BY PULocationID"
+    ),
+    "count_highcard": (
+        "SELECT PULocationID, COUNT(*) AS c FROM trips GROUP BY PULocationID"
+    ),
+    "sum_highcard_filtered": (
+        "SELECT PULocationID, SUM(total_amount) AS s FROM trips "
+        "WHERE trip_distance > 2 GROUP BY PULocationID"
+    ),
+}
+
+
+QUERY_SETS = {"tpch": QUERIES, "tpcds": QUERIES_TPCDS, "taxi": QUERIES_TAXI}
 TARGETS = [None, 95.0, 99.0]  # None -> mode default error budget
 # For --coverage-sweep: hold ε (accuracy target) fixed, vary the requested
 # coverage level, and check empirical coverage tracks it.
@@ -309,7 +353,8 @@ if __name__ == "__main__":
                     help="ablation: single-cell CI, no Bonferroni across the grid")
     ap.add_argument("--fixed-look-ci", action="store_true",
                     help="ablation: fixed 95% single-look interval, no anytime-valid schedule")
-    ap.add_argument("--queryset", choices=["tpch", "tpcds"], default="tpch")
+    ap.add_argument("--queryset", choices=["tpch", "tpcds", "taxi"],
+                    default="tpch")
     ap.add_argument("--coverage-sweep", action="store_true",
                     help="hold eps at 5%%, vary requested coverage 0.80..0.99")
     args = ap.parse_args()

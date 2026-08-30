@@ -1,6 +1,7 @@
 # Reproducibility image for the AetherQuery AQP evaluation.
 # Builds a clean TPC-H SF1 database with DuckDB's dbgen, runs the unit tests,
-# regenerates the smoke results, and runs the end-to-end coverage study.
+# regenerates the smoke results, runs the end-to-end coverage study, and runs
+# the three-policy controller comparison.
 #
 #   docker build -t aetherquery-repro .
 #   docker run --rm aetherquery-repro            # runs scripts/reproduce.sh

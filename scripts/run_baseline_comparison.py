@@ -13,6 +13,12 @@ differ only in the stopping policy:
                condition, a worst-cell stop, and a fallback to exact execution
                when the target cannot be certified.
 
+  static       no adaptation: one sample at a fixed 5% nominal fraction, the
+               same Bonferroni-corrected grid interval at a nominal 95%, and
+               whatever width that happens to give. This is the
+               offline-sample-with-intervals policy, and it is the control for
+               "does adapting the sample size buy anything".
+
   ola          an online-aggregation-style stopper in the spirit of
                Hellerstein et al. (1997): every cell carries its own running
                estimate and its own nominal 95% interval; a cell is finished
@@ -108,13 +114,44 @@ def _run_aetherquery(run_approx, parsed, sql, target):
         "sample_rate": sample_rate, "stop_reason": stop_reason,
         "looks": len(looks),
         "fraction_read": sum(float(it.get("sample_fraction") or 0.0) for it in looks),
+        "target_met": not declined,
     }
 
 
 # --------------------------------------------------------------------------
-# arm 2: the online-aggregation-style per-aggregate stopper
+# arm 2: no adaptation, one fixed-fraction sample with the same intervals
 # --------------------------------------------------------------------------
-def _run_ola(evaluator, parse, sql, source, progression, eps):
+STATIC_FRACTION = 0.05
+
+
+def _run_static(evaluator, parse, sql, source, eps):
+    t0 = time.perf_counter()
+    parsed = parse(sql)
+    estimate_set, met, _detail = evaluator(
+        parsed, source, STATIC_FRACTION,
+        coverage_level=COVERAGE_LEVEL,
+        target_relative_error=eps,
+        multiplicity_correction=True,
+    )
+    latency_ms = (time.perf_counter() - t0) * 1000.0
+    cells = {}
+    for group_key, by_alias in estimate_set.estimates.items():
+        gk = tuple(group_key) if isinstance(group_key, tuple) else ()
+        for alias, est in by_alias.items():
+            if est.estimate is not None:
+                cells[(gk, alias)] = (float(est.estimate), est.relative_half_width)
+    return {
+        "cells": cells, "latency_ms": latency_ms, "declined": False,
+        "sample_rate": STATIC_FRACTION, "target_met": bool(met),
+        "stop_reason": "fixed_fraction",
+        "looks": 1, "fraction_read": STATIC_FRACTION,
+    }
+
+
+# --------------------------------------------------------------------------
+# arm 3: the online-aggregation-style per-aggregate stopper
+# --------------------------------------------------------------------------
+def _run_ola(evaluator, parse, plan_fn, sql, source, target, eps):
     """
     Walk the same ladder. At each look form per-cell intervals at a fixed
     nominal 95% with no multiplicity correction. A cell freezes the first time
@@ -124,8 +161,11 @@ def _run_ola(evaluator, parse, sql, source, progression, eps):
     frozen: dict[tuple, tuple[float, float | None, float]] = {}
     latest: dict[tuple, tuple[float, float | None, float]] = {}
     t0 = time.perf_counter()
-    # Parse inside the timed region so both arms pay the same front-end cost.
+    # Parse and resolve the ladder inside the timed region, so this arm pays the
+    # same front-end cost as the controller: parsing, and for a join the
+    # sketch-guided starting-rate probe that resolve_sampling_plan issues.
     parsed = parse(sql)
+    progression = list(plan_fn(parsed, source, "balanced", target)["progression"])
     last_fraction = progression[-1] if progression else 1.0
     exhausted = True
     looks = 0
@@ -172,6 +212,7 @@ def _run_ola(evaluator, parse, sql, source, progression, eps):
         "stop_reason": "ladder_exhausted" if exhausted else "per_cell_target_met",
         "looks": looks,
         "fraction_read": fraction_read,
+        "target_met": not exhausted,
     }
 
 
@@ -202,7 +243,7 @@ def _score(trial, truth):
 def _summarise(policy, qname, sql, target, trials, results, exact_ms):
     cells_scored = cells_covered = 0
     grids_scored = grids_covered = 0
-    declined = mis_certified = 0
+    declined = mis_certified = target_met = 0
     rel_errs, signed, widths, lat, rates = [], [], [], [], []
     looks, fracs = [], []
     stop_reasons: dict[str, int] = {}
@@ -214,6 +255,7 @@ def _summarise(policy, qname, sql, target, trials, results, exact_ms):
         fracs.append(trial["fraction_read"])
         sr = trial["stop_reason"]
         stop_reasons[sr] = stop_reasons.get(sr, 0) + 1
+        target_met += 1 if trial.get("target_met") else 0
         if trial["declined"]:
             declined += 1
             continue
@@ -240,6 +282,7 @@ def _summarise(policy, qname, sql, target, trials, results, exact_ms):
         "grids_scored": grids_scored,
         "mis_certification_pct": 100.0 * mis_certified / n,
         "exact_fallback_pct": 100.0 * declined / n,
+        "target_met_pct": 100.0 * target_met / n,
         "rel_err_p50_pct": statistics.median(rel_errs) * 100 if rel_errs else float("nan"),
         "rel_err_p95_pct": (
             statistics.quantiles(rel_errs, n=20)[-1] * 100 if len(rel_errs) >= 20
@@ -271,8 +314,9 @@ def run(database: str, trials: int, out_path: str, queryset: str = "tpch"):
     records = []
 
     print(f"{'query':18} {'tgt':5} {'policy':12} {'cell%':7} {'grid%':7} "
-          f"{'miscert%':9} {'exact%':7} {'errP95':8} {'hwP50':8} {'speedup':8}")
-    print("-" * 104)
+          f"{'miscert%':9} {'met%':6} {'exact%':7} {'errP95':8} {'hwP50':8} "
+          f"{'speedup':8}")
+    print("-" * 112)
 
     for qname, sql in queries.items():
         try:
@@ -295,6 +339,8 @@ def run(database: str, trials: int, out_path: str, queryset: str = "tpch"):
         exact_ms = (time.perf_counter() - t0) * 1000.0
 
         for target in TARGETS:
+            # Resolved once here only to record epsilon and the ladder in the
+            # artifact; each OLA trial re-resolves it inside its timed region.
             plan = resolve_sampling_plan(parsed, "duckdb", "balanced", target)
             progression = list(plan["progression"])
             if target is not None:
@@ -302,16 +348,20 @@ def run(database: str, trials: int, out_path: str, queryset: str = "tpch"):
             else:
                 eps = float(plan["convergence_threshold"])
 
-            for policy in ("aetherquery", "ola"):
+            for policy in ("aetherquery", "static", "ola"):
                 out = []
                 failed = False
                 for _ in range(trials):
                     try:
                         if policy == "aetherquery":
                             trial = _run_aetherquery(run_approx, parsed, sql, target)
+                        elif policy == "static":
+                            trial = _run_static(evaluator, parse_analytical_query,
+                                                sql, "duckdb", eps)
                         else:
-                            trial = _run_ola(evaluator, parse_analytical_query, sql,
-                                             "duckdb", progression, eps)
+                            trial = _run_ola(evaluator, parse_analytical_query,
+                                             resolve_sampling_plan, sql,
+                                             "duckdb", target, eps)
                     except Exception as exc:
                         print(f"{qname:18} {policy} FAILED "
                               f"({type(exc).__name__}: {str(exc)[:40]})")
@@ -327,7 +377,8 @@ def run(database: str, trials: int, out_path: str, queryset: str = "tpch"):
                 records.append(rec)
                 print(f"{qname:18} {str(target):5} {policy:12} "
                       f"{rec['cell_coverage_pct']:7.1f} {rec['grid_coverage_pct']:7.1f} "
-                      f"{rec['mis_certification_pct']:9.1f} {rec['exact_fallback_pct']:7.0f} "
+                      f"{rec['mis_certification_pct']:9.1f} {rec['target_met_pct']:6.0f} "
+                      f"{rec['exact_fallback_pct']:7.0f} "
                       f"{rec['rel_err_p95_pct']:8.3f} {rec['reported_half_width_p50_pct']:8.3f} "
                       f"{rec['speedup']:8.2f}")
 
@@ -354,7 +405,8 @@ def run(database: str, trials: int, out_path: str, queryset: str = "tpch"):
             "queryset": queryset,
             "trials": trials,
             "coverage_level": COVERAGE_LEVEL,
-            "experiment": "aetherquery_vs_online_aggregation_style_baseline",
+            "experiment": "aetherquery_vs_fixed_sample_vs_online_aggregation_style",
+            "static_fraction": STATIC_FRACTION,
             "shared_ladder": "backend.core.runtime_sampling.resolve_sampling_plan",
             "baseline_note": (
                 "online-aggregation-style per-cell stopping discipline implemented "
@@ -374,6 +426,7 @@ if __name__ == "__main__":
     ap.add_argument("--database", default="aqp_eval/datasets/tpch_sf1.duckdb")
     ap.add_argument("--trials", type=int, default=40)
     ap.add_argument("--output", default="aqp_eval/results/baseline_comparison_sf1.json")
-    ap.add_argument("--queryset", choices=["tpch", "tpcds"], default="tpch")
+    ap.add_argument("--queryset", choices=["tpch", "tpcds", "taxi"],
+                    default="tpch")
     args = ap.parse_args()
     run(args.database, args.trials, args.output, queryset=args.queryset)
