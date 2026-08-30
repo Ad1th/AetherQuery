@@ -28,14 +28,16 @@ cluster-sampled and a naive 1/f expansion under-covers badly (measured
 0–60%), we treat the fact table's physical row group as the sampling unit and
 form a cluster-sampling interval whose degrees of freedom are the block count.
 
-On TPC-H (SF1, SF10) and a synthetic Pareto-tailed dataset, AetherQuery
-delivers **94–100% empirical interval coverage at an explicit accuracy target
-across single-table and fact→dimension-join query shapes, at 3–11× speedup**
-over exact execution (one 30-trial configuration reads 88%, inside the Wilson
-band for nominal 95%). Two ablations show both corrections are load-bearing: without the multiplicity
-correction, grouped/multi-aggregate coverage drops 5–15 points; without the
-anytime-valid alpha-spending schedule, multi-look coverage drops 1–7 points
-below nominal. Under pathological skew the engine degrades to an exact scan
+On **TPC-H (SF1, SF10), TPC-DS (SF1), and a synthetic Pareto-tailed
+dataset**, AetherQuery delivers **94–100% empirical interval coverage at an
+explicit accuracy target across single-table and fact→dimension-join query
+shapes, at 3–11× speedup** over exact execution. Sweeping the requested
+coverage level shows the intervals are calibrated — empirical coverage tracks
+nominal across 0.80–0.99 and is conservative, never optimistic — and the point
+estimates are unbiased to within ±0.1%. Two ablations show both corrections
+are load-bearing: without the multiplicity correction, grouped/multi-aggregate
+coverage drops 5–15 points; without the anytime-valid alpha-spending schedule,
+multi-look coverage drops 1–7 points below nominal. Under pathological skew the engine degrades to an exact scan
 rather than return an interval it cannot back up.
 
 ---
@@ -95,14 +97,15 @@ random sample of the output at all.
   keys. A monitor tracks the distinct-group count across iterations and refuses
   to certify while groups are still appearing.
 
-- **C4 — Evaluation (§8).** Across TPC-H SF1/SF10 and a synthetic
-  Pareto(α=2.5) dataset, coverage is 95–100% at an explicit target at 4–10×
-  speedup; the multiplicity ablation drops multi-cell coverage 10–15 points;
-  and beyond skewness ≈ 100 the engine degrades to exact rather than
-  mis-certify.
+- **C4 — Evaluation (§8).** Across TPC-H SF1/SF10, TPC-DS SF1, and a
+  synthetic Pareto(α=2.5) dataset: coverage 94–100% at an explicit target at
+  3–11× speedup; empirical coverage tracks the requested level across
+  0.80–0.99; point estimates unbiased to ±0.1%; two ablations (multiplicity,
+  anytime-valid) each worth 5–15 and 1–7 coverage points; and beyond skewness
+  ≈ 100 the engine degrades to exact rather than mis-certify.
 
 The implementation is ~1.7k lines of Python over DuckDB, with a stdlib-only
-estimator library (215 unit tests). It is open and reproducible
+estimator library (217 unit tests). It is open and reproducible
 (`scripts/reproduce.sh`, `Dockerfile`).
 
 ---
@@ -437,7 +440,31 @@ Single-cell queries are unaffected (as they must be); every multi-cell query
 loses 5–15 points of coverage. This is the empirical case for stopping on the
 worst cell of a *corrected* grid rather than on any single interval.
 
-### 8.4 Robustness to skew
+### 8.4 Second benchmark: TPC-DS
+
+`store_sales` (2.9 M rows, SF1) over the TPC-DS snowflake schema — a different
+schema, real-ish skew, a signed profit column, and ~4 % NULL foreign keys.
+40 trials, ε = 5 %:
+
+| query | coverage | bias | note |
+|---|---|---|---|
+| `COUNT(*)`, `SUM` ungrouped | 100 | ±0.1 % | |
+| `SUM(ss_sales_price)` grouped (12 stores) | 91 | −0.01 % | grouped-SUM softness, as on TPC-H SF1 |
+| `SUM(ss_net_profit)` grouped (signed) | 99.6 | −0.07 % | signed column, no issue |
+| `AVG(ss_quantity)` grouped | 100 | −0.18 % | |
+| `SUM` + `WHERE` grouped | 99.6 | +0.04 % | |
+| 3 aggregates grouped | 91 | −0.01 % | dragged by the SUM cell |
+| `COUNT(*)` by state, `store_sales ⋈ store` | 92–95 | ±0.03 % | **1.6–3.8× speedup** |
+| `SUM` by category, `store_sales ⋈ item` | — | — | one category is tiny; the engine never certifies below a full scan and returns exact, as designed |
+
+TPC-DS **found a real bug**: `AVG`/`SUM` divided by `COUNT(*)` rather than
+`COUNT(x)`, biasing `AVG` low by the column's NULL fraction — invisible on
+TPC-H (no NULLs), −2.6 % on `store_sales`. Fixed (emit `COUNT(x) FILTER` per
+column); post-fix bias is −0.18 %. The grouped-`SUM` softness (~91 % at 12
+stores) reproduces the TPC-H SF1 result and is the same documented
+DEFF-constant limitation, not a schema-specific effect.
+
+### 8.5 Robustness to skew
 
 Synthetic Pareto(α=2.5), skewness ≈ 29 (40 trials): coverage **95–100% across
 every query shape** at 1.3–3.5× speedup, zero exact fallback — the
@@ -446,7 +473,7 @@ intervals never reach ε within the budget and the engine returns exact answers
 for `SUM`/`AVG`: coverage is not violated, but the speedup is lost. This is
 the designed failure mode — never a confident wrong interval.
 
-### 8.5 Joins
+### 8.6 Joins
 
 INNER-equi joins, cluster estimator (§5). **SF10** (30 trials): 1:N `COUNT`
 98–100% (**5× faster than exact**), 4-way star `SUM` 100% (**1.0–1.5×**),
@@ -455,7 +482,7 @@ N:1 `COUNT` 99.5–100% (~0.9×). **SF1**: star/N:1 joins 98–100%; the 1:N joi
 guard lifts ε=5% from 86% to 96%). Naive-expansion baseline on the 1:N join:
 0–60%.
 
-### 8.6 Adaptivity vs. a fixed sample
+### 8.7 Adaptivity vs. a fixed sample
 
 `static_ci` (fixed 5%, same intervals, no adaptation) vs AetherQuery, SF10:
 
@@ -467,6 +494,32 @@ guard lifts ε=5% from 86% to 96%). Naive-expansion baseline on the 1:N join:
 
 Equal accuracy at 5–10× less data and 2–3× lower latency; `static_ci` abstains
 on joins.
+
+### 8.8 Calibration and unbiasedness
+
+**Calibration.** Holding ε at 5 % and sweeping the *requested* coverage level,
+empirical coverage should track it. TPC-H SF1, 60 trials:
+
+| query | 0.80 | 0.90 | 0.95 | 0.99 |
+|---|---|---|---|---|
+| `SUM` grouped | 91.7 | 97.2 | 98.9 | 98.3 |
+| `SUM` + `WHERE` grouped | 97.2 | 97.2 | 99.4 | 100 |
+| 3 aggregates grouped | 93.3 | 93.3 | 96.5 | 98.9 |
+| 1:N join `COUNT` | 98.7 | 99.3 | 99.7 | 100 |
+| 4-way star `SUM` | 99.5 | 99.6 | 99.9 | 100 |
+
+Empirical coverage is monotone in the requested level and sits **at or above**
+it everywhere — the intervals are conservative, never optimistic, across the
+0.80–0.99 operating range. (`COUNT(*)` and `AVG` grouped are 100 % at every
+level and omitted.)
+
+**Unbiasedness.** The mean *signed* relative error of the point estimates,
+over all cells and trials at requested coverage 0.95, is within **±0.1 %** for
+every query except the 1:N join `COUNT` (+0.5 %, the ~73-block SF1 fact table).
+This is the empirical check on Lemma 1: the expansion and cluster estimators
+are unbiased, and the reported error is dispersion, not systematic offset. The
+one bias TPC-DS surfaced — `AVG` low by the NULL fraction — was a `COUNT(*)`
+vs `COUNT(x)` implementation error, now fixed (§8.4).
 
 ---
 

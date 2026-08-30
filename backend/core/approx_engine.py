@@ -23,6 +23,7 @@ def run_approx(
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
     ci_multiplicity_correction: bool = True,
     ci_anytime_valid: bool = True,
+    ci_coverage_level: float = 0.95,
 ) -> dict[str, Any]:
     source_key = source.lower().strip()
     parsed = parse_analytical_query(query)
@@ -34,4 +35,5 @@ def run_approx(
         progress_callback=progress_callback,
         ci_multiplicity_correction=ci_multiplicity_correction,
         ci_anytime_valid=ci_anytime_valid,
+        ci_coverage_level=ci_coverage_level,
     )

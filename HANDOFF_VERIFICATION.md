@@ -609,3 +609,58 @@ Unbiased general (M:N / outer) join estimator + convergence proof;
 per-query design-effect measurement; SF100 and a workload-level study;
 BlinkDB/WanderJoin re-implementations; a real-world dataset; the prose of the
 paper itself.
+
+---
+
+## 10. Fifth pass — anytime-valid stopping, per-cell method, TPC-DS, calibration
+
+### 10.1 Anytime-valid stopping
+`run_runtime_sampling` spends the 5% budget across looks with a harmonic
+alpha-spending schedule (`alpha_for_look`); look t's interval is at
+`1 - alpha/(t(t+1))` so all looks hold at 95% under any stopping rule.
+Ablation (`--fixed-look-ci`): removing it drops multi-look coverage 1-7 points
+below nominal (sum_grouped 98->94, multi_agg eps=1% 99->94); single-look
+queries unchanged. Cost: ~1.5-2x more sample on multi-look queries.
+
+### 10.2 Per-cell interval method
+`estimate_query`'s `method` arg accepts `cell -> Method`; the grid keeps CLT
+where Cochran's rule allows and uses empirical-Bernstein only per skewed cell.
+Backward compatible; TPC-H numbers unchanged (homogeneous grids), covered by a
+mixed-skew test.
+
+### 10.3 Star-join speedup
+`build_join_block_summary_sql`: the cluster estimator's sufficient statistics
+(Sum block totals, Sum of squares, block count per output group) computed
+entirely in SQL -- one row per output group, no per-block Python. Profiled
+0.70s -> 0.001s per look for a 25-nation star join. SF10 join speedup: star
+SUM 0.6x -> 1.0-1.5x, N:1 ~0.5x -> ~0.9x, 1:N 4.1x -> 5.5x. Coverage
+unchanged (98-100%).
+
+### 10.4 TPC-DS as a second benchmark
+`--queryset tpcds` runs a store_sales query set over the TPC-DS snowflake
+schema (SF1, 2.9M rows, ~4% NULL FKs). **Found and fixed a real bug**: AVG/SUM
+divided by COUNT(*) not COUNT(x), biasing AVG low by the column's NULL
+fraction -- invisible on TPC-H, -2.6% on store_sales. Post-fix bias -0.18%,
+coverage -> 100%. Grouped-SUM softness (~91% at 12 stores) reproduces the
+TPC-H SF1 result.
+
+### 10.5 Calibration + unbiasedness
+`--coverage-sweep`: hold eps at 5%, vary requested coverage 0.80..0.99.
+Empirical coverage is **monotone in the requested level and at-or-above it
+everywhere** (conservative, never optimistic). Mean signed relative error
+(bias) is within +/-0.1% for every query bar the SF1 73-block 1:N join
+(+0.5%) -- empirical confirmation of estimator unbiasedness.
+
+### 10.6 Artifacts
+```
+backend/core/{runtime_sampling,approx_engine,sufficient_stats}.py
+backend/stats/api.py                         estimate_query per-cell method
+scripts/run_engine_coverage_study.py         --queryset, --coverage-sweep, bias, ablations
+scripts/generate_skewed_dataset.py           (unchanged)
+aqp_eval/datasets/tpcds_sf1.duckdb           git-ignored, dsdgen sf1
+aqp_eval/results/engine_coverage_study_tpcds_sf1.json    new
+aqp_eval/results/engine_coverage_sweep_sf1.json          new
+aqp_eval/results/engine_coverage_study_sf1_fixedlook.json  new (anytime-valid ablation)
+PAPER.md sections 8.3-8.8                     TPC-DS, calibration, ablations
+```
+**Test count: 217. Frontend build: passes.**

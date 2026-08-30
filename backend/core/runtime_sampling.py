@@ -237,6 +237,7 @@ def run_runtime_sampling(
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
     ci_multiplicity_correction: bool = True,
     ci_anytime_valid: bool = True,
+    ci_coverage_level: float = 0.95,
 ) -> dict[str, Any]:
     mode_key = mode if mode in MODE_CONFIGS else "balanced"
     config = _derive_accuracy_config(mode_key, accuracy_target)
@@ -361,7 +362,7 @@ def run_runtime_sampling(
     # looks adaptively). Each look's interval is then computed at a higher
     # coverage level so that ALL looks hold simultaneously at 95%.
     ci_look = 0
-    ci_look_coverage = 0.95
+    ci_look_coverage = ci_coverage_level
 
     while position < len(progression):
         sample_fraction = progression[position]
@@ -394,10 +395,10 @@ def run_runtime_sampling(
             _evaluator = evaluate_join_sample_accuracy if ci_join else evaluate_sample_accuracy
             ci_look += 1
             if ci_anytime_valid:
-                alpha_t = alpha_for_look(Schedule.HARMONIC, 1.0 - 0.95, ci_look)
+                alpha_t = alpha_for_look(Schedule.HARMONIC, 1.0 - ci_coverage_level, ci_look)
                 ci_look_coverage = 1.0 - alpha_t
             else:
-                ci_look_coverage = 0.95
+                ci_look_coverage = ci_coverage_level
             try:
                 _estimate_set, ci_met, ci_detail = _evaluator(
                     parsed,
