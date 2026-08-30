@@ -88,3 +88,9 @@ datasets/*.csv
 .coverage
 htmlcov/
 .claude/
+
+# Unpublished paper draft + patent-claim notes -- keep local, do NOT publish
+PAPER.md
+PAPER_RESULTS.md
+PATENT_NOTES.md
+.paper-local/
