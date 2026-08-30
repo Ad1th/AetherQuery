@@ -5,12 +5,33 @@
 full verification pass (tests, build, lint, benchmark regeneration) and assess
 readiness for (1) a patent filing and (2) a Q1 journal paper.
 
-> **Update (same day, second pass):** the two blocking gaps in §5 have been
-> addressed in code. Real confidence-interval stopping is now wired into the
-> engine (`backend/core/sufficient_stats.py`), and JOIN sample-rate selection
-> is now driven by HyperLogLog sketches, not a fixed table. See **§7** for what
-> changed and the new measured coverage numbers; §5 is kept as the original
-> assessment for context. Test count is now **207**.
+> ## Current status (after four passes — read this first)
+>
+> §1–§6 are the original handoff verification and the *initial* readiness
+> assessment. §7–§9 record what was built afterwards; the summary:
+>
+> * **Real confidence-interval stopping** is wired into the engine for
+>   non-JOIN aggregates and for INNER fact→dimension joins (via a
+>   cluster-sampling estimator on the fact table's physical row groups).
+>   `stop_reason = ci_within_target`; `confidence` is now a genuine coverage
+>   level, not the old iteration-stability heuristic.
+> * **Measured empirical coverage** (`scripts/run_engine_coverage_study.py`,
+>   `aqp_eval/results/engine_coverage_study*.json`): 95–100 % at an explicit
+>   accuracy target across single-table and INNER-equi-join query shapes, on
+>   TPC-H SF1/SF10 and a synthetic Pareto dataset (skewness ≈ 29), at
+>   4–10× speedup single-table. Under pathological skew (≈ 440) it degrades to
+>   exact scans rather than report a loose interval as tight.
+> * **HLL-guided join start rate**, **group-completeness escalation**, a
+>   **static-sampling CI baseline** (`static_ci`), a **Dockerfile +
+>   `scripts/reproduce.sh`**, `PATENT_NOTES.md` (Claims A–D, all implemented),
+>   and `PAPER_RESULTS.md` (method + result tables + limitations).
+> * **214 tests pass, 0 warnings. Frontend builds.**
+>
+> Still genuinely open (research / infra / writing): unbiased general
+> (M:N/outer) join estimator + convergence proof; per-query design-effect
+> measurement (a constant 1.75 is used); SF100 and a workload-level study;
+> BlinkDB/WanderJoin re-implementations; a real-world dataset; the paper prose;
+> the attorney prior-art search.
 
 ---
 
