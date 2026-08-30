@@ -207,6 +207,11 @@ def build_sufficient_stats_sql(
             # COUNT(*) needs only the domain count, already captured above.
             continue
         col = _col_expr(agg.expression)
+        # COUNT of NON-NULL values: exact AVG/SUM ignore NULLs, so the ratio
+        # denominator for AVG must be COUNT(x), not COUNT(*). Using COUNT(*)
+        # biases AVG low by the column's NULL fraction (invisible on TPC-H,
+        # ~2.6% on TPC-DS store_sales).
+        select_parts.append(f"COUNT({col}){filt} AS __aqp_nnn__{alias}")
         select_parts.append(f"SUM({col}){filt} AS __aqp_sum__{alias}")
         select_parts.append(f"SUM({col} * {col}){filt} AS __aqp_sumxx__{alias}")
         select_parts.append(f"SUM({col} * {col} * {col}){filt} AS __aqp_sumxxx__{alias}")
@@ -387,9 +392,13 @@ def fetch_sufficient_stats(
             min_x = row.get(f"__aqp_min__{alias}")
             max_x = row.get(f"__aqp_max__{alias}")
             skew_x = row.get(f"__aqp_skew__{alias}")
+            # AVG divides by the count of non-NULL values, not COUNT(*); SUM's
+            # variance is also over the non-NULL observations.
+            nnn = row.get(f"__aqp_nnn__{alias}")
+            cell_n_domain = int(nnn) if nnn is not None else n_domain
             by_alias[alias] = SampleStats(
                 n_sample=n_sample,
-                n_domain=n_domain,
+                n_domain=cell_n_domain,
                 sum_x=float(sum_x) if sum_x is not None else 0.0,
                 sum_xx=float(sum_xx) if sum_xx is not None else 0.0,
                 sum_xxx=float(sum_xxx) if sum_xxx is not None else None,
