@@ -17,6 +17,7 @@ from backend.core.sufficient_stats import (
     evaluate_join_sample_accuracy,
     join_ci_is_defensible,
 )
+from backend.stats.sequential import Schedule, alpha_for_look
 
 
 MODE_CONFIGS: dict[str, dict[str, Any]] = {
@@ -235,6 +236,7 @@ def run_runtime_sampling(
     accuracy_target: float | None = None,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
     ci_multiplicity_correction: bool = True,
+    ci_anytime_valid: bool = True,
 ) -> dict[str, Any]:
     mode_key = mode if mode in MODE_CONFIGS else "balanced"
     config = _derive_accuracy_config(mode_key, accuracy_target)
@@ -351,6 +353,15 @@ def run_runtime_sampling(
     progression = list(config["progression"])
     position = 0
     last_ci_block: dict[str, Any] | None = None
+    # Anytime-valid stopping: the CI is re-checked at every look, which is
+    # optional stopping and makes a fixed 95% interval optimistic. Spend the
+    # 5% error budget across looks with a harmonic schedule (the right choice
+    # here -- each look re-draws an independent TABLESAMPLE, so there is no
+    # martingale for a tighter stream construction, and the controller inserts
+    # looks adaptively). Each look's interval is then computed at a higher
+    # coverage level so that ALL looks hold simultaneously at 95%.
+    ci_look = 0
+    ci_look_coverage = 0.95
 
     while position < len(progression):
         sample_fraction = progression[position]
@@ -381,12 +392,18 @@ def run_runtime_sampling(
             frame_length = 1
         elif use_ci_stop:
             _evaluator = evaluate_join_sample_accuracy if ci_join else evaluate_sample_accuracy
+            ci_look += 1
+            if ci_anytime_valid:
+                alpha_t = alpha_for_look(Schedule.HARMONIC, 1.0 - 0.95, ci_look)
+                ci_look_coverage = 1.0 - alpha_t
+            else:
+                ci_look_coverage = 0.95
             try:
                 _estimate_set, ci_met, ci_detail = _evaluator(
                     parsed,
                     source,
                     sample_fraction,
-                    coverage_level=0.95,
+                    coverage_level=ci_look_coverage,
                     target_relative_error=ci_target_error,
                     multiplicity_correction=ci_multiplicity_correction,
                 )
@@ -478,6 +495,7 @@ def run_runtime_sampling(
             "convergence_error": None if math.isinf(convergence_error) else convergence_error,
             "confidence": confidence,
             "ci_met": ci_met,
+            "ci_look_coverage": ci_look_coverage if use_ci_stop else None,
             "ci_max_relative_half_width": ci_max_rel_hw,
             "groups_returned": groups_returned,
             "groups_incomplete": groups_incomplete,
@@ -650,6 +668,9 @@ def run_runtime_sampling(
         "convergence_threshold": config["convergence_threshold"],
         "target_relative_error": ci_target_error if use_ci_stop else None,
         "ci": last_ci_block,
+        "anytime_valid": use_ci_stop and ci_anytime_valid,
+        "ci_looks": ci_look,
+        "ci_final_look_coverage": ci_look_coverage if use_ci_stop else None,
         "join_rate_selection": join_rate_diag,
         "stop_reason": stop_reason,
         "groups_returned": last_iter["groups_returned"],

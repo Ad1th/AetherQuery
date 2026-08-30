@@ -330,6 +330,35 @@ def test_ci_path_escalates_and_never_reports_false_converged(monkeypatch):
     assert calls["fractions"] == sorted(calls["fractions"])
 
 
+def test_anytime_valid_uses_a_tighter_per_look_coverage(monkeypatch):
+    parsed = parse_analytical_query("SELECT COUNT(*) AS cnt FROM lineitem")
+    seen_coverages = []
+
+    def fake_eval(parsed, source, sample_fraction, *, coverage_level,
+                  target_relative_error, multiplicity_correction=True):
+        seen_coverages.append(coverage_level)
+        # never meets target -> forces several looks
+        detail = {
+            "columns": ["cnt"], "rows": [[1]], "result_map": {"row_0": {"cnt": 1}},
+            "n_sample": 100, "sample_query": "-", "query_time": 0.01,
+            "max_relative_half_width": 0.5, "unresolved_cells": 0,
+            "ci": {"max_relative_half_width": 0.5},
+        }
+        return object(), False, detail
+
+    monkeypatch.setattr(rs, "evaluate_sample_accuracy", fake_eval)
+
+    av = rs.run_runtime_sampling(parsed, "duckdb", "balanced", ci_anytime_valid=True)
+    fixed = rs.run_runtime_sampling(parsed, "duckdb", "balanced", ci_anytime_valid=False)
+
+    assert av["anytime_valid"] is True
+    assert fixed["anytime_valid"] is False
+    # anytime-valid: first look at 97.5% (alpha/2), tightening each look
+    av_covs = [c for c in seen_coverages if c != 0.95]
+    assert av_covs and av_covs[0] == pytest.approx(0.975)
+    assert av_covs == sorted(av_covs)  # monotonically tighter
+
+
 def test_accuracy_target_sets_a_tighter_error_budget(monkeypatch):
     parsed = parse_analytical_query("SELECT COUNT(*) AS cnt FROM lineitem")
     _patch_engine_ci(monkeypatch, [(True, 0.02)])
