@@ -54,6 +54,7 @@ from backend.stats.design_effect import (
     BlockAggregate,
     ClusterSampleStats,
     estimate_clustered,
+    estimate_design_effect,
 )
 
 _AGG_BY_FUNC = {
@@ -63,15 +64,18 @@ _AGG_BY_FUNC = {
 }
 
 # Engine-native TABLESAMPLE SYSTEM draws whole row groups, not independent
-# rows, so its variance is larger than simple-random-sampling theory predicts.
-# Measuring the true design effect per query is separate work (it needs
-# block-level aggregates -- the same machinery evaluate_join_sample_accuracy
-# uses); until then a constant inflation is applied to SUM/AVG intervals.
-# Empirically DEFF=1.75 lifts grouped-SUM coverage on TPC-H SF1 from ~93% to
-# ~97.5% (nominal 95%), at ~0.2pp wider relative half-widths. COUNT is left at
-# 1.0: it estimates a bounded indicator mean and the coverage study found it
-# robust to the design.
+# rows, so its SUM/AVG variance is larger than simple-random-sampling theory
+# predicts. This constant inflates the interval variance for it. It also
+# absorbs the CLT's mild small-n optimism, which is why a pure per-query DEFF
+# measurement (`_measure_system_design_effect`, kept as a validation
+# diagnostic) empirically covers slightly worse *and* costs an extra scan.
+# On TPC-H the measured DEFF for grouped SUM is ~1.9-2.0, close to this value.
+# COUNT is left at 1.0: it estimates a bounded indicator mean and the coverage
+# study found it robust to the design.
 SYSTEM_SAMPLING_DESIGN_EFFECT = 1.75
+# Clamp for the measurement diagnostic: never below 1.0 (SRS beating cluster
+# sampling is estimation noise), never above this (a runaway estimate).
+MAX_MEASURED_DESIGN_EFFECT = 12.0
 
 # SELECT COUNT(*) FROM <table> is answered from metadata in DuckDB; cache it
 # per (source, table) so the interval path costs one extra query per process,
@@ -227,6 +231,95 @@ def build_sufficient_stats_sql(
     return sql
 
 
+def _measure_system_design_effect(
+    parsed: ParsedQuery, source: str, sample_fraction: float
+) -> float | None:
+    """
+    Measure the TABLESAMPLE SYSTEM design effect for this query's SUM columns,
+    from block-level aggregates over the same sample: DEFF = Var_cluster /
+    Var_srs on the same rows, treating the fact row group as the sampling unit.
+
+    Returns the worst (largest) DEFF across SUM cells, clamped to
+    [1.0, MAX_MEASURED_DESIGN_EFFECT], or None if it cannot be measured
+    (non-DuckDB, < 2 blocks, degenerate variance, no SUM/AVG column).
+    """
+    if source != "duckdb":
+        return None
+    sum_aggs = [a for a in parsed.aggregates if a.func.lower() in ("sum", "avg")]
+    if not sum_aggs:
+        return None
+    population = _population_size(parsed.table, source)
+    if population is None:
+        return None
+
+    where = parsed.where_clause
+    filt = f" FILTER (WHERE {where})" if where else ""
+    sel = [f"(rowid // {DUCKDB_VECTOR_SIZE}) AS __blk"]
+    sel += [f"{g} AS __g{i}" for i, g in enumerate(parsed.group_by)]
+    sel.append("COUNT(*) AS __n")
+    sel.append(f"COUNT(*){filt} AS __nd")
+    for a in sum_aggs:
+        c = _col_expr(a.expression)
+        sel.append(f"SUM({c}){filt} AS __s_{a.alias}")
+        sel.append(f"SUM({c} * {c}){filt} AS __ss_{a.alias}")
+    grp = ["__blk"] + [f"__g{i}" for i in range(len(parsed.group_by))]
+    sql = (
+        f"SELECT {', '.join(sel)} FROM {parsed.table} "
+        f"TABLESAMPLE SYSTEM ({sample_fraction * 100.0:.4f} PERCENT) "
+        f"GROUP BY {', '.join(grp)}"
+    )
+    try:
+        payload = _execute_source_query(sql, source)
+        cols = payload.get("columns", [])
+        rows = [dict(zip(cols, r)) for r in payload.get("rows", [])]
+        if not rows or "__blk" not in cols:
+            return None
+        return _design_effect_from_block_rows(parsed, rows, sum_aggs, population)
+    except Exception:
+        return None
+
+
+def _design_effect_from_block_rows(parsed, rows, sum_aggs, population):
+    total_blocks = max(1, math.ceil(population / DUCKDB_VECTOR_SIZE))
+    ngrp = len(parsed.group_by)
+    block_ids = sorted({r["__blk"] for r in rows})
+    by_group: dict[tuple, dict[Any, dict[str, float]]] = {}
+    for r in rows:
+        gk = tuple(r.get(f"__g{i}") for i in range(ngrp))
+        by_group.setdefault(gk, {})[r["__blk"]] = r
+    if len(block_ids) < 2:
+        return None
+
+    worst: float | None = None
+    for gk, per_block in by_group.items():
+        for a in sum_aggs:
+            blocks_list = []
+            for blk in block_ids:
+                r = per_block.get(blk)
+                if r is None:
+                    blocks_list.append(BlockAggregate(block_id=blk, n_rows=0, n_domain=0))
+                else:
+                    blocks_list.append(BlockAggregate(
+                        block_id=blk,
+                        n_rows=int(r.get("__n") or 0),
+                        n_domain=int(r.get("__nd") or 0),
+                        sum_x=float(r.get(f"__s_{a.alias}") or 0.0),
+                        sum_xx=float(r.get(f"__ss_{a.alias}") or 0.0),
+                    ))
+            cluster = ClusterSampleStats(
+                blocks=tuple(blocks_list),
+                total_blocks=total_blocks,
+                population_size=population,
+            )
+            deff = estimate_design_effect(Aggregate.SUM, cluster)
+            if deff is not None and math.isfinite(deff):
+                worst = deff if worst is None else max(worst, deff)
+
+    if worst is None:
+        return None
+    return max(1.0, min(MAX_MEASURED_DESIGN_EFFECT, worst))
+
+
 def fetch_sufficient_stats(
     parsed: ParsedQuery, source: str, sample_fraction: float
 ) -> tuple[dict[Any, dict[str, SampleStats]], int, str, float]:
@@ -329,6 +422,13 @@ def evaluate_sample_accuracy(
     Take one sample, form a family of confidence intervals over the result grid,
     and report whether every cell's relative half-width is within target.
 
+    `design_effect` inflates SUM/AVG interval variance. The default constant is
+    used on the hot path (measuring it per query needs a second block-grouped
+    scan and, empirically, the constant covers both the block design effect and
+    the CLT's small-n optimism better than a pure DEFF measurement does).
+    `_measure_system_design_effect` is available as a validation diagnostic --
+    on TPC-H it returns ~1.9-2.0 for grouped SUM, close to the constant.
+
     The returned dict carries the point estimates and per-cell intervals in the
     shape `runtime_sampling` needs for its result payload.
     """
@@ -399,6 +499,8 @@ def evaluate_sample_accuracy(
         "query_time": query_time,
         "max_relative_half_width": estimate_set.max_relative_half_width,
         "unresolved_cells": len(estimate_set.unresolved),
+        "design_effect": design_effect,
+        "design_effect_measured": False,
         "ci": estimate_set.to_dict(),
     }
     return estimate_set, bool(met), detail

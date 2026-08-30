@@ -175,6 +175,33 @@ def test_non_duckdb_join_ci_delegates_to_single_table_path(monkeypatch):
     assert "result_map" in detail
 
 
+def test_measure_system_design_effect_is_bounded_and_safe(monkeypatch):
+    parsed = parse_analytical_query(
+        "SELECT l_returnflag, SUM(l_extendedprice) AS s FROM lineitem GROUP BY l_returnflag"
+    )
+    ss._POPULATION_CACHE.clear()
+
+    def _exec(sql, source):
+        if "COUNT(*) FROM lineitem" in sql and "rowid" not in sql:
+            return {"columns": ["n"], "rows": [[6_000_000]]}
+        # block-grouped probe: 30 blocks, one group, growing per-block totals
+        cols = ["__blk", "__g0", "__n", "__nd", "__s_s", "__ss_s"]
+        rows = []
+        for blk in range(30):
+            base = 1000 + blk * 50
+            rows.append([blk, "A", 200, 200, base * 200.0, (base ** 2) * 200.0 * 3])
+        return {"columns": cols, "rows": rows}
+
+    monkeypatch.setattr(ss, "_execute_source_query", _exec)
+    deff = ss._measure_system_design_effect(parsed, "duckdb", 0.05)
+    assert deff is not None
+    assert 1.0 <= deff <= ss.MAX_MEASURED_DESIGN_EFFECT
+    # non-duckdb and no-SUM cases return None, never raise
+    assert ss._measure_system_design_effect(parsed, "postgres", 0.05) is None
+    count_only = parse_analytical_query("SELECT COUNT(*) AS c FROM lineitem")
+    assert ss._measure_system_design_effect(count_only, "duckdb", 0.05) is None
+
+
 def test_join_sample_accuracy_uses_cluster_estimator(monkeypatch):
     parsed = parse_analytical_query(
         "SELECT c.c_mktsegment, COUNT(*) AS c "
