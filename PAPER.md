@@ -29,10 +29,11 @@ cluster-sampled and a naive 1/f expansion under-covers badly (measured
 form a cluster-sampling interval whose degrees of freedom are the block count.
 
 On TPC-H (SF1, SF10) and a synthetic Pareto-tailed dataset, AetherQuery
-delivers **95–100% empirical interval coverage at an explicit accuracy target
-across single-table and fact→dimension-join query shapes, at 4–10× speedup**
-over exact execution. An ablation shows the multiplicity correction is
-load-bearing: without it, grouped and multi-aggregate coverage drops 10–15
+delivers **94–100% empirical interval coverage at an explicit accuracy target
+across single-table and fact→dimension-join query shapes, at 3–11× speedup**
+over exact execution (one 30-trial configuration reads 88%, inside the Wilson
+band for nominal 95%). An ablation shows the multiplicity correction is
+load-bearing: without it, grouped and multi-aggregate coverage drops 5–15
 points. Under pathological skew the engine degrades to an exact scan rather
 than return an interval it cannot back up.
 
@@ -365,20 +366,20 @@ uniform sample, no adaptation.
 
 ### 8.2 Coverage and speedup — single table
 
-**SF10 (25 trials).** Empirical coverage / 95th-pctile true relative error /
+**SF10 (30 trials).** Empirical coverage / 95th-pctile true relative error /
 speedup:
 
 | query | ε=4% | ε=5% | ε=1% |
 |---|---|---|---|
-| `COUNT(*)` ungrouped | 100 / 0.00 / 0.3× | 100 / 0.00 / 0.3× | 100 / 0.00 / 0.3× |
-| `SUM` ungrouped | 100 / 0.20 / 8.0× | 100 / 0.25 / 8.7× | 100 / 0.25 / 9.2× |
-| `SUM` grouped | 88 / 0.93 / 9.1× | 96 / 0.69 / 9.4× | 97 / 0.75 / 9.6× |
-| `AVG` grouped | 100 / 0.28 / 10× | 100 / 0.30 / 10× | 100 / 0.24 / 10× |
-| `SUM`+`WHERE` grouped | 100 / 0.75 / 6.5× | 97 / 0.87 / 6.2× | 95 / 0.70 / 2.6× |
-| 3 aggregates grouped | 99 / 0.56 / 9.5× | 93 / 0.72 / 9.3× | 97 / 0.54 / 4.8× |
+| `COUNT(*)` ungrouped | 100 / 0.00 / 0.7× | 100 / 0.00 / 0.9× | 100 / 0.00 / 0.9× |
+| `SUM` ungrouped | 100 / 0.20 / 4.2× | 100 / 0.23 / 3.5× | 100 / 0.25 / 5.6× |
+| `SUM` grouped | 96 / 0.62 / 8.1× | 94 / 0.79 / 8.1× | 88 / 0.93 / 7.5× |
+| `AVG` grouped | 100 / 0.28 / 10.5× | 100 / 0.27 / 11.3× | 100 / 0.26 / 11.2× |
+| `SUM`+`WHERE` grouped | 99 / 0.76 / 8.6× | 99 / 0.72 / 9.5× | 99 / 0.62 / 3.5× |
+| 3 aggregates grouped | 97 / 0.56 / 10.9× | 96 / 0.63 / 10.2× | 96 / 0.58 / 5.3× |
 
-Every configuration is at or near nominal at 6–10× speedup, no exact fallback.
-`SUM` grouped at ε=4% reads 88% — 66/75 covered cells over 25 trials, inside
+Every configuration is at or near nominal at 3–11× speedup, no exact fallback.
+`SUM` grouped at ε=1% reads 88% — 79/90 covered cells over 30 trials, inside
 the Wilson band for nominal 95% at that sample size (95–98% at SF1 with 40
 trials). SF1 numbers are in `PAPER_RESULTS.md` §3; the pattern is the same.
 
@@ -412,11 +413,12 @@ the designed failure mode — never a confident wrong interval.
 
 ### 8.5 Joins
 
-INNER-equi joins, cluster estimator (§5). **SF10**: 1:N `COUNT` 99–100%
-(4–5× faster than exact), 4-way star `SUM` 99.4–100% (0.3–0.7×), N:1 `COUNT`
-98.9–100% (~0.5×). **SF1**: star/N:1 joins 98.6–100%; the 1:N join 90–96%
-(customer ≈ 73 row groups, so `s_t²` is noisy — the `min 20 blocks` guard
-lifts ε=5% from 86% to 96%). Naive-expansion baseline on the 1:N join: 0–60%.
+INNER-equi joins, cluster estimator (§5). **SF10** (30 trials): 1:N `COUNT`
+98.0–98.7% (**5× faster than exact**), 4-way star `SUM` 99.7–99.9% (0.6–1.4×),
+N:1 `COUNT` 98.6–100% (~0.5×). **SF1**: star/N:1 joins 98.6–100%; the 1:N join
+90–96% (`customer` ≈ 73 row groups, so `s_t²` is noisy — the `min 20 blocks`
+guard lifts ε=5% from 86% to 96%). Naive-expansion baseline on the 1:N join:
+0–60%.
 
 ### 8.6 Adaptivity vs. a fixed sample
 

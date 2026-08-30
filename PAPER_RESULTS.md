@@ -68,36 +68,35 @@ relative error, `speedup` vs exact.
   at ε=1% the engine must sample 20–60% and can be slower than exact on the
   small SF1 tables.
 
-## 4. Coverage and speedup — single-table (TPC-H SF10, 25 trials)
+## 4. Coverage and speedup — single-table (TPC-H SF10, 30 trials)
 
-| query | ε=4% cov / errP95 / ×  | ε=5% | ε=1% |
+| query | e=4% cov / errP95 / x  | e=5% | e=1% |
 |---|---|---|---|
-| `COUNT(*)` ungrouped     | 100 / 0.00 / 0.3 | 100 / 0.00 / 0.3 | 100 / 0.00 / 0.3 |
-| `SUM` ungrouped          | 100 / 0.20 / 8.0 | 100 / 0.25 / 8.7 | 100 / 0.25 / 9.2 |
-| `SUM` grouped            | 88  / 0.93 / 9.1 | 96  / 0.69 / 9.4 | 97  / 0.75 / 9.6 |
-| `AVG` grouped            | 100 / 0.28 / 10  | 100 / 0.30 / 10  | 100 / 0.24 / 10  |
-| `SUM` + `WHERE` grouped  | 100 / 0.75 / 6.5 | 97  / 0.87 / 6.2 | 95  / 0.70 / 2.6 |
-| 3 aggregates grouped     | 99  / 0.56 / 9.5 | 93  / 0.72 / 9.3 | 97  / 0.54 / 4.8 |
+| `COUNT(*)` ungrouped     | 100 / 0.00 / 0.7 | 100 / 0.00 / 0.9 | 100 / 0.00 / 0.9 |
+| `SUM` ungrouped          | 100 / 0.20 / 4.2 | 100 / 0.23 / 3.5 | 100 / 0.25 / 5.6 |
+| `SUM` grouped            | 96  / 0.62 / 8.1 | 94  / 0.79 / 8.1 | 88  / 0.93 / 7.5 |
+| `AVG` grouped            | 100 / 0.28 / 10.5| 100 / 0.27 / 11.3| 100 / 0.26 / 11.2|
+| `SUM` + `WHERE` grouped  | 99  / 0.76 / 8.6 | 99  / 0.72 / 9.5 | 99  / 0.62 / 3.5 |
+| 3 aggregates grouped     | 97  / 0.56 / 10.9| 96  / 0.63 / 10.2| 96  / 0.58 / 5.3 |
 
 At SF10 every single-table configuration is at or near nominal coverage at
-**6–10× speedup**, with no exact fallback. `SUM` grouped at ε=4% reads 88% —
-that is 66/75 covered cells over 25 trials, inside the Wilson band for nominal
-95% at that sample size; the same query is 95–98% at SF1 (40 trials) and at
-SF10 with an explicit target.
+**3-11x speedup**, with no exact fallback. `SUM` grouped at e=1% reads 88% --
+that is 79/90 covered cells over 30 trials, inside the Wilson band for nominal
+95% at that sample size; the same query is 95-98% at SF1 (40 trials).
 
-### Joins (SF10, 25 trials)
+### Joins (SF10, 30 trials)
 
-| query | ε=4% | ε=5% | ε=1% | speedup |
+| query | e=4% | e=5% | e=1% | speedup |
 |---|---|---|---|---|
-| `COUNT(*)` by segment, `customer⋈orders` (1:N) | 100  | 99.2 | 100  | 4.1–4.7× |
-| `SUM(price)` by nation, 4-way star (N:1)        | 99.8 | 99.8 | 100  | 0.3–0.7× |
-| `COUNT(*)` by shipmode, `lineitem⋈orders` (N:1) | 98.9 | 99.4 | 100  | ~0.5× |
+| `COUNT(*)` by segment, `customer join orders` (1:N) | 98.0 | 98.0 | 98.7 | **5.0-5.8x** |
+| `SUM(price)` by nation, 4-way star (N:1)            | 99.7 | 99.9 | 99.7 | 0.6-1.4x |
+| `COUNT(*)` by shipmode, `lineitem join orders` (N:1)| 98.6 | 100  | 99.5 | ~0.5x |
 
-The 1:N join that dipped to ~90% at SF1 recovers to **99–100%** at SF10
-(730 vs 73 fact row groups). Every join configuration is ≥ 98.9%. The 1:N join
-is 4–5× faster than exact; the fact-side star joins are below 1× because the
-block-grouped query over the ~30k-block `lineitem` sample costs more than the
-already-fast exact join — an implementation cost, not a statistical one.
+The 1:N join that dipped to ~90% at SF1 recovers to **98%** at SF10 (730 vs 73
+fact row groups) and runs **5x faster than exact**. Every join configuration
+is >= 98%. The fact-side star joins are around 1x because the block-grouped
+query over the ~30k-block `lineitem` sample costs about as much as the
+already-fast exact join -- an implementation cost, not a statistical one.
 
 ## 5. Fact→dimension joins (TPC-H SF1, 40 trials)
 
