@@ -8,11 +8,15 @@ controller a real basis for stopping -- a confidence interval whose width it
 can compare against the user's error target -- by fetching, in one query per
 sample, exactly the sufficient statistics `backend.stats` needs:
 
-    COUNT(*), COUNT(*) FILTER (pred), SUM(x), VAR_SAMP(x), skewness(x),
-    MIN(x), MAX(x)      per GROUP BY group
+    COUNT(*), COUNT(*) FILTER (pred), and -- FILTERed by the predicate so the
+    sampling denominator survives -- SUM(x), SUM(x*x), SUM(x*x*x), VAR_SAMP(x),
+    skewness(x), MIN(x), MAX(x)      per GROUP BY group
 
 plus the sampled relation's true row count (cached), so the *realized*
 sampling fraction n/N is used rather than the nominal TABLESAMPLE percentage.
+A constant design-effect inflation (SYSTEM_SAMPLING_DESIGN_EFFECT) widens
+SUM/AVG intervals to account for TABLESAMPLE SYSTEM being row-group, not row,
+sampling.
 
 For an INNER fact->dimension join we can still form an honest interval by
 treating the physical row group of the sampled (fact) table as the sampling
