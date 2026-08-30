@@ -99,7 +99,8 @@ def _approx_cells(payload, parsed):
     return cells
 
 
-def run(database: str, trials: int, out_path: str, multiplicity: bool = True):
+def run(database: str, trials: int, out_path: str, multiplicity: bool = True,
+        anytime_valid: bool = True):
     os.environ["AETHERQUERY_DUCKDB_PATH"] = str(Path(database).resolve())
     from backend.core.parser import parse_analytical_query
     from backend.core.approx_engine import run_approx
@@ -108,6 +109,9 @@ def run(database: str, trials: int, out_path: str, multiplicity: bool = True):
     if not multiplicity:
         print("### ABLATION: Bonferroni multiplicity correction DISABLED "
               "(single-cell CI, online-aggregation style)\n")
+    if not anytime_valid:
+        print("### ABLATION: anytime-valid stopping DISABLED "
+              "(fixed 95% single-look interval; optional-stopping optimism)\n")
 
     con = ddb.get_connection()
     records = []
@@ -139,7 +143,8 @@ def run(database: str, trials: int, out_path: str, multiplicity: bool = True):
             for _ in range(trials):
                 t0 = time.perf_counter()
                 payload = run_approx(sql, "duckdb", mode="balanced", accuracy_target=target,
-                                    ci_multiplicity_correction=multiplicity)
+                                    ci_multiplicity_correction=multiplicity,
+                                    ci_anytime_valid=anytime_valid)
                 lat_ms.append((time.perf_counter() - t0) * 1000)
                 rates.append(payload.get("sample_rate"))
                 sr = payload.get("stop_reason")
@@ -180,6 +185,7 @@ def run(database: str, trials: int, out_path: str, multiplicity: bool = True):
             records.append({
                 "query": qname, "sql": sql.strip(), "target": target,
                 "multiplicity_correction": multiplicity,
+                "anytime_valid": anytime_valid,
                 "trials": trials, "empirical_coverage_pct": cover_pct,
                 "ci_cells_scored": total, "exact_fallback_pct": exact_pct,
                 "rel_err_p50_pct": err_p50, "rel_err_p95_pct": err_p95,
@@ -205,5 +211,9 @@ if __name__ == "__main__":
     ap.add_argument("--output", default="aqp_eval/results/engine_coverage_study_sf1.json")
     ap.add_argument("--no-multiplicity-correction", action="store_true",
                     help="ablation: single-cell CI, no Bonferroni across the grid")
+    ap.add_argument("--fixed-look-ci", action="store_true",
+                    help="ablation: fixed 95% single-look interval, no anytime-valid schedule")
     args = ap.parse_args()
-    run(args.database, args.trials, args.output, multiplicity=not args.no_multiplicity_correction)
+    run(args.database, args.trials, args.output,
+        multiplicity=not args.no_multiplicity_correction,
+        anytime_valid=not args.fixed_look_ci)

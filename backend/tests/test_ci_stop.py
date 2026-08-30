@@ -175,6 +175,40 @@ def test_non_duckdb_join_ci_delegates_to_single_table_path(monkeypatch):
     assert "result_map" in detail
 
 
+def test_grid_uses_per_cell_interval_method(monkeypatch):
+    """A skewed cell gets the finite-sample bound; a well-behaved cell in the
+    same grid keeps CLT -- the wide bound is not forced on the whole grid."""
+    parsed = parse_analytical_query(
+        "SELECT l_returnflag, SUM(a) AS skewed, SUM(b) AS calm "
+        "FROM lineitem GROUP BY l_returnflag"
+    )
+    ss._POPULATION_CACHE.clear()
+
+    def _exec(sql, source):
+        if "COUNT(*) FROM lineitem" in sql and "rowid" not in sql:
+            return {"columns": ["n"], "rows": [[6_000_000]]}
+        n = 40_000
+        cols = [
+            "l_returnflag", "__aqp_n_bucket", "__aqp_n_domain",
+            "__aqp_sum__skewed", "__aqp_sumxx__skewed", "__aqp_sumxxx__skewed",
+            "__aqp_var__skewed", "__aqp_min__skewed", "__aqp_max__skewed", "__aqp_skew__skewed",
+            "__aqp_sum__calm", "__aqp_sumxx__calm", "__aqp_sumxxx__calm",
+            "__aqp_var__calm", "__aqp_min__calm", "__aqp_max__calm", "__aqp_skew__calm",
+        ]
+        row = ["A", n, n,
+               # skewed: huge skewness_direct, bounded range
+               n * 100.0, n * 1e7, n * 1e12, 1e6, 0.0, 5_000_000.0, 60.0,
+               # calm: near-symmetric, small range
+               n * 25.0, n * 700.0, n * 20000.0, 200.0, 1.0, 50.0, 0.05]
+        return {"columns": cols, "rows": [row]}
+
+    monkeypatch.setattr(ss, "_execute_source_query", _exec)
+    es, met, d = ss.evaluate_sample_accuracy(parsed, "duckdb", 0.01, target_relative_error=0.5)
+    by_alias = {e["alias"]: e["method"] for e in d["ci"]["estimates"]}
+    assert by_alias["skewed"] == "empirical_bernstein"
+    assert by_alias["calm"] == "clt"
+
+
 def test_measure_system_design_effect_is_bounded_and_safe(monkeypatch):
     parsed = parse_analytical_query(
         "SELECT l_returnflag, SUM(l_extendedprice) AS s FROM lineitem GROUP BY l_returnflag"
@@ -210,20 +244,23 @@ def test_join_sample_accuracy_uses_cluster_estimator(monkeypatch):
     )
     ss._POPULATION_CACHE.clear()
 
-    # 40 fact blocks sampled, two mktsegments, ~500 joined rows per (block,group)
-    block_rows = []
-    for blk in range(40):
-        for seg in ("BUILDING", "AUTOMOBILE"):
-            block_rows.append({
-                "__aqp_blk": blk, "__aqp_grp_0": seg,
-                "__aqp_n_rows": 500 + (blk % 7) * 20, "__aqp_n_domain": 500 + (blk % 7) * 20,
-            })
-    cols = list(block_rows[0].keys())
+    # SQL-summarised shape: one row per output group. 40 fact blocks, per-block
+    # in-domain count ~500 -> block total sum = 40*500, sum of squares = 40*500^2.
+    m_total, per_block = 40, 500
+    summary = {
+        "columns": ["__g0", "__m_g", "__m_total", "__n_rows", "__n_domain",
+                    "__ct_t", "__ct_tt"],
+        "rows": [
+            [seg, m_total, m_total, m_total * per_block, m_total * per_block,
+             m_total * per_block, m_total * (per_block ** 2) * 1.02]
+            for seg in ("BUILDING", "AUTOMOBILE")
+        ],
+    }
 
     def _exec(sql, source):
         if "COUNT(*) FROM customer" in sql and "rowid" not in sql:
             return {"columns": ["n"], "rows": [[150_000]]}
-        return {"columns": cols, "rows": [[r[c] for c in cols] for r in block_rows]}
+        return summary
 
     monkeypatch.setattr(ss, "_execute_source_query", _exec)
 
@@ -235,8 +272,7 @@ def test_join_sample_accuracy_uses_cluster_estimator(monkeypatch):
     assert detail["blocks_sampled"] == 40
     for e in detail["ci"]["estimates"]:
         assert e["ci_low"] < e["estimate"] < e["ci_high"]
-        # df from blocks, not rows
-        assert e["n_domain"] > 40
+        assert e["n_domain"] > 40  # scaled up from the block totals
 
 
 def test_grouped_sum_interval_tightens_with_fraction(monkeypatch):
@@ -328,6 +364,35 @@ def test_ci_path_escalates_and_never_reports_false_converged(monkeypatch):
     assert result["stop_reason"] != "converged"
     assert result["confidence"] < 95.0
     assert calls["fractions"] == sorted(calls["fractions"])
+
+
+def test_anytime_valid_uses_a_tighter_per_look_coverage(monkeypatch):
+    parsed = parse_analytical_query("SELECT COUNT(*) AS cnt FROM lineitem")
+    seen_coverages = []
+
+    def fake_eval(parsed, source, sample_fraction, *, coverage_level,
+                  target_relative_error, multiplicity_correction=True):
+        seen_coverages.append(coverage_level)
+        # never meets target -> forces several looks
+        detail = {
+            "columns": ["cnt"], "rows": [[1]], "result_map": {"row_0": {"cnt": 1}},
+            "n_sample": 100, "sample_query": "-", "query_time": 0.01,
+            "max_relative_half_width": 0.5, "unresolved_cells": 0,
+            "ci": {"max_relative_half_width": 0.5},
+        }
+        return object(), False, detail
+
+    monkeypatch.setattr(rs, "evaluate_sample_accuracy", fake_eval)
+
+    av = rs.run_runtime_sampling(parsed, "duckdb", "balanced", ci_anytime_valid=True)
+    fixed = rs.run_runtime_sampling(parsed, "duckdb", "balanced", ci_anytime_valid=False)
+
+    assert av["anytime_valid"] is True
+    assert fixed["anytime_valid"] is False
+    # anytime-valid: first look at 97.5% (alpha/2), tightening each look
+    av_covs = [c for c in seen_coverages if c != 0.95]
+    assert av_covs and av_covs[0] == pytest.approx(0.975)
+    assert av_covs == sorted(av_covs)  # monotonically tighter
 
 
 def test_accuracy_target_sets_a_tighter_error_budget(monkeypatch):

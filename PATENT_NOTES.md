@@ -139,6 +139,7 @@ Tested: `backend/tests/test_runtime_join_guard.py`.
 * Inflating the design effect of `SUM`/`AVG` interval variance by a constant
   (implemented: 1.75), leaving `COUNT` at 1.0.
   (`SYSTEM_SAMPLING_DESIGN_EFFECT`.)
+* Anytime-valid stopping via a harmonic alpha-spending schedule over looks, so certification holds under any stopping rule despite independent re-draws.
 * Degrading to an exact scan, rather than reporting a tight interval, when the
   interval never reaches ε within the sampling budget.
 

@@ -32,10 +32,11 @@ On TPC-H (SF1, SF10) and a synthetic Pareto-tailed dataset, AetherQuery
 delivers **94–100% empirical interval coverage at an explicit accuracy target
 across single-table and fact→dimension-join query shapes, at 3–11× speedup**
 over exact execution (one 30-trial configuration reads 88%, inside the Wilson
-band for nominal 95%). An ablation shows the multiplicity correction is
-load-bearing: without it, grouped and multi-aggregate coverage drops 5–15
-points. Under pathological skew the engine degrades to an exact scan rather
-than return an interval it cannot back up.
+band for nominal 95%). Two ablations show both corrections are load-bearing: without the multiplicity
+correction, grouped/multi-aggregate coverage drops 5–15 points; without the
+anytime-valid alpha-spending schedule, multi-look coverage drops 1–7 points
+below nominal. Under pathological skew the engine degrades to an exact scan
+rather than return an interval it cannot back up.
 
 ---
 
@@ -237,13 +238,20 @@ synthetic "confidence" `100·(ε / widest_relative_half_width)`: far from target
 returns the exact answer (`progression_exhausted`) rather than a loose
 interval labelled tight.
 
-**Coverage caveat.** These are single-look intervals. Repeatedly evaluating
-`meets_target` across iterations is optional stopping, which makes the reported
-coverage optimistic. `backend/stats/sequential.py` provides alpha-spending
-confidence sequences for an anytime-valid variant; the evaluation (§8) is with
-the single-look intervals and empirically the optimism is small at the
-iteration counts used (2–5). Making the deployed path anytime-valid is future
-work.
+**Anytime-valid stopping.** The interval is re-checked at every look, and the
+stop is chosen using the same data — optional stopping, which makes a fixed
+`1−α` interval optimistic. The controller spends `α` across looks with a
+*harmonic* alpha-spending schedule: look `t` computes its interval at coverage
+`1 − α/(t(t+1))`, and `Σ_t α/(t(t+1)) = α`, so a union bound gives
+`P(every look's interval covers) ≥ 1 − α` **for any stopping rule**. Harmonic
+(rather than a tighter betting confidence sequence) is the correct construction
+here because each look issues a fresh `TABLESAMPLE` — the looks are independent
+re-draws, not a growing stream, so there is no martingale to exploit. The cost
+is that later looks demand tighter intervals: on a query that takes ~5 looks
+the engine samples ~1.5–2× more before it can certify (§8.3). On a query that
+certifies in one look the cost is a single step from 95% to 97.5% coverage,
+which is negligible. Nesting the iterations (accumulating rows instead of
+re-drawing) would enable a tighter sequence and is future work.
 
 ---
 
@@ -260,13 +268,17 @@ fact row groups. The effective design effect is large; an SRS-variance
 interval is far too tight. Measured coverage of the naive approach on
 `customer ⋈ orders … GROUP BY c_mktsegment`: **0–60% vs a nominal 95%**.
 
-**The cluster construction.** `build_join_block_stats_sql` groups the joined
-result by `fact.rowid // 2048` *and* the query's `GROUP BY`, returning per
-(block, group) the row count, in-domain count, and `SUM(x)`, `SUM(x*x)`. For
-each output group we build a `ClusterSampleStats` over **every sampled fact row
-group** — a zero-valued `BlockAggregate` where the group is absent from a
-block, so a sparse group's sampling fraction is computed over all sampled
-blocks, not just the ones it landed in. Then `estimate_clustered`:
+**The cluster construction.** An inner query groups the joined result by
+`fact.rowid // 2048` *and* the query's `GROUP BY` to form per-(block, group)
+block totals; an outer query aggregates those per output group into the block
+count `m`, `Σ t_b`, `Σ t_b²`, and the row/domain counts — **one row per output
+group**, so the interval is assembled with no per-block work
+(`build_join_block_summary_sql`, for `COUNT`/`SUM`; `AVG` uses a row-assembly
+path). The absent-block zeros are folded into the variance analytically by
+using `m_total` (all sampled blocks) as the denominator:
+`s_t² = (Σ t_b² − (Σ t_b)² / m_total) / (m_total − 1)`, so a sparse group's
+sampling fraction is computed over every sampled block, not just the ones it
+landed in. Then:
 
     Ŷ = (M/m) · Σ (block totals),   Var = M² (1 − m/M) s_t² / m
 
@@ -276,12 +288,16 @@ of the per-block totals. The interval rests on `m − 1` degrees of freedom, not
 blocks` guard blocks a stop while `s_t²` is itself poorly determined.
 
 **Result.** Coverage on three INNER-equi joins (1:N `COUNT`, 4-way star `SUM`,
-N:1 `COUNT`): **98.9–100% at SF10** across all ε. At SF1 the 1:N join dips to
+N:1 `COUNT`): **98–100% at SF10** across all ε. At SF1 the 1:N join dips to
 ~90–96% because `customer` is only ~73 row groups; the star joins hold nominal
-at every scale. Join speedup is 4–5× for the 1:N join and 0.3–0.7× for
-fact-side star joins (the block-grouped query over a ~30k-block `lineitem`
-sample costs more than the already-fast exact join — an implementation cost,
-not a statistical one).
+at every scale. Speedup: **5× for the 1:N join** (sampling the "one" side
+genuinely shrinks the join), **1.0–1.5× for the 4-way star `SUM`**, ~0.9× for
+the N:1 fact-side `COUNT` — the SQL-summarised estimator removed the Python
+per-block cost (profiled 0.70 s → 0.001 s per look for a 25-nation star join),
+leaving the sampled *join itself* as the floor: a 5–30% fact sample still
+joins the full dimensions, and the adaptive loop re-joins on each look.
+Nesting the samples (accumulating rows rather than re-drawing) would remove
+the re-join and is future work.
 
 Other join shapes (outer, non-equi, M:N) get no interval; they keep the
 completeness heuristic (§6) and are labelled `groups_incomplete` when
@@ -383,7 +399,26 @@ Every configuration is at or near nominal at 3–11× speedup, no exact fallback
 the Wilson band for nominal 95% at that sample size (95–98% at SF1 with 40
 trials). SF1 numbers are in `PAPER_RESULTS.md` §3; the pattern is the same.
 
-### 8.3 The multiplicity correction is load-bearing (ablation)
+### 8.3 Ablations: both corrections are load-bearing
+
+**Anytime-valid stopping.** SF1, 40 trials, with the harmonic alpha-spending
+schedule *disabled* (fixed 95% single-look interval, `--fixed-look-ci`):
+
+| query | anytime-valid | fixed single-look | Δ |
+|---|---|---|---|
+| `COUNT(*)` / `SUM` ungrouped (1 look) | 100 | 100 | 0 |
+| `SUM` grouped, ε=4% | 97.5 | 94.2 | +3.3 |
+| `SUM` grouped, ε=5% | 98.3 | 95.0 | +3.3 |
+| 3 aggregates, ε=1% | 98.6 | 93.6 | +5.0 |
+| 1:N join `COUNT`, ε=5% | 96.8 | 89.4 | +7.4 |
+
+Single-look queries are identical (there is nothing to correct); every
+multi-look query is 1–5 points below nominal without the schedule and safely
+above it with. The price is more sample per query and more exact-fallback on
+the hardest cells (the 1:N join at ε=1% on SF1 falls back to exact in every
+trial once the intervals are made honest).
+
+**Multiplicity correction.**
 
 Re-running SF1 with Bonferroni **disabled** (`--no-multiplicity-correction`;
 each cell tested independently, online-aggregation style):
@@ -414,8 +449,8 @@ the designed failure mode — never a confident wrong interval.
 ### 8.5 Joins
 
 INNER-equi joins, cluster estimator (§5). **SF10** (30 trials): 1:N `COUNT`
-98.0–98.7% (**5× faster than exact**), 4-way star `SUM` 99.7–99.9% (0.6–1.4×),
-N:1 `COUNT` 98.6–100% (~0.5×). **SF1**: star/N:1 joins 98.6–100%; the 1:N join
+98–100% (**5× faster than exact**), 4-way star `SUM` 100% (**1.0–1.5×**),
+N:1 `COUNT` 99.5–100% (~0.9×). **SF1**: star/N:1 joins 98–100%; the 1:N join
 90–96% (`customer` ≈ 73 row groups, so `s_t²` is noisy — the `min 20 blocks`
 guard lifts ε=5% from 86% to 96%). Naive-expansion baseline on the 1:N join:
 0–60%.
@@ -441,10 +476,10 @@ on joins.
    outer/non-equi/M:N joins get the completeness heuristic and no interval.
 2. **Small fact tables.** Cluster-estimator joins need ≳ 100 fact row groups;
    below that, 1:N-join coverage is ~90%.
-3. **Single-look intervals.** The deployed stopping rule is not anytime-valid;
-   the across-look optimism is small at the observed iteration counts but is
-   not zero. Confidence sequences exist in `backend/stats` and are not wired
-   in.
+3. **Confidence-sequence tightness.** The deployed stopping rule *is*
+   anytime-valid (harmonic alpha-spending, §4.3), but because each look
+   re-draws rather than accumulating, it cannot use the tighter betting /
+   time-uniform constructions. Nesting the samples would close this.
 4. **Design effect constant.** 1.75, validated by but not replaced with a
    per-query measurement.
 5. **Scale and workload.** SF1/SF10 and single queries; no SF100, no mixed
