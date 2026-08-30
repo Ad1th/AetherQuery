@@ -366,7 +366,7 @@ not on the primary table and should be improved (probe the dimension table).
 
 End-to-end study: run the engine N times per (query, target), compare the
 reported 95 % interval against the true answer. TPC-H SF1, 40 trials,
-`aqp_eval/results/engine_coverage_study.json`:
+`aqp_eval/results/engine_coverage_study_sf1.json`:
 
 | query | target | empirical coverage | true err p50 / p95 | speedup |
 |---|---|---|---|---|

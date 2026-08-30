@@ -196,6 +196,6 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--database", default="aqp_eval/datasets/tpch_sf10.duckdb")
     ap.add_argument("--trials", type=int, default=100)
-    ap.add_argument("--output", default="aqp_eval/results/engine_coverage_study.json")
+    ap.add_argument("--output", default="aqp_eval/results/engine_coverage_study_sf1.json")
     args = ap.parse_args()
     run(args.database, args.trials, args.output)
