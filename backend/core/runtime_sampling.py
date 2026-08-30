@@ -230,49 +230,26 @@ def estimate_query_complexity(parsed: ParsedQuery) -> str:
     return "complex"
  
 
-def run_runtime_sampling(
+def resolve_sampling_plan(
     parsed: ParsedQuery,
     source: str,
     mode: str,
     accuracy_target: float | None = None,
-    progress_callback: Callable[[dict[str, Any]], None] | None = None,
-    ci_multiplicity_correction: bool = True,
-    ci_anytime_valid: bool = True,
-    ci_coverage_level: float = 0.95,
+    *,
+    single_pass_mode: bool = False,
 ) -> dict[str, Any]:
+    """
+    Resolve the sample-size ladder and time budget the controller will walk.
+
+    Factored out of `run_runtime_sampling` so that an alternative stopping
+    policy (the online-aggregation-style baseline used in the evaluation) can
+    be driven over exactly the same ladder, by construction rather than by
+    a transcribed copy. The returned dict is the mode config with
+    `progression` and `time_budget_seconds` resolved, plus the join-rate
+    diagnostic.
+    """
     mode_key = mode if mode in MODE_CONFIGS else "balanced"
     config = _derive_accuracy_config(mode_key, accuracy_target)
-
-    # CRITICAL FIX: Never use single-pass mode for JOIN queries
-    # JOINs require adaptive progression to find matching rows at optimal sample rates
-    single_pass_mode = (
-        mode_key == "balanced"
-        and accuracy_target is None
-        and not parsed.has_joins  # Force multi-iteration for JOINs
-    )
-
-    # Confidence-interval stopping: stop when a real Bonferroni-corrected CI
-    # over the whole result grid is inside the error budget, not when two
-    # consecutive samples happen to agree (stability is not accuracy).
-    #
-    # Non-JOIN aggregates use the single-table estimators. INNER equi-joins that
-    # are fact -> dimension in shape (join_ci_is_defensible) use the cluster
-    # estimator: the sampled fact table's physical row group is the sampling
-    # unit, so the between-block variance absorbs the 1:N fan-out. A naive 1/f
-    # expansion here was measured to under-cover at 0-60%; the cluster path
-    # measures 95-100%. Other joins keep the group-completeness heuristic.
-    ci_join = parsed.has_joins and join_ci_is_defensible(parsed)
-    use_ci_stop = bool(getattr(parsed, "aggregates", None)) and (
-        not parsed.has_joins or ci_join
-    )
-    if accuracy_target is not None:
-        ci_target_error = max(0.005, min(0.5, 1.0 - float(accuracy_target) / 100.0))
-    else:
-        ci_target_error = float(config["convergence_threshold"])
-    # A single 1% block sample with no interval is exactly the unreliable case
-    # CI stopping exists to fix, so never short-circuit it.
-    single_pass_mode = single_pass_mode and not use_ci_stop
-
     complexity = estimate_query_complexity(parsed)
 
     # Apply JOIN complexity multiplier to time budgets
@@ -332,6 +309,63 @@ def run_runtime_sampling(
             config["progression"] = floored
     else:
         config["progression"] = [0.01]
+    config["join_min_sample_rate"] = join_min_sample_rate
+    config["join_rate_diag"] = join_rate_diag
+    config["complexity"] = complexity
+    return config
+
+
+def run_runtime_sampling(
+    parsed: ParsedQuery,
+    source: str,
+    mode: str,
+    accuracy_target: float | None = None,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    ci_multiplicity_correction: bool = True,
+    ci_anytime_valid: bool = True,
+    ci_coverage_level: float = 0.95,
+) -> dict[str, Any]:
+    mode_key = mode if mode in MODE_CONFIGS else "balanced"
+    config = _derive_accuracy_config(mode_key, accuracy_target)
+
+    # CRITICAL FIX: Never use single-pass mode for JOIN queries
+    # JOINs require adaptive progression to find matching rows at optimal sample rates
+    single_pass_mode = (
+        mode_key == "balanced"
+        and accuracy_target is None
+        and not parsed.has_joins  # Force multi-iteration for JOINs
+    )
+
+    # Confidence-interval stopping: stop when a real Bonferroni-corrected CI
+    # over the whole result grid is inside the error budget, not when two
+    # consecutive samples happen to agree (stability is not accuracy).
+    #
+    # Non-JOIN aggregates use the single-table estimators. INNER equi-joins that
+    # are fact -> dimension in shape (join_ci_is_defensible) use the cluster
+    # estimator: the sampled fact table's physical row group is the sampling
+    # unit, so the between-block variance absorbs the 1:N fan-out. A naive 1/f
+    # expansion here was measured to under-cover at 0-60%; the cluster path
+    # measures 95-100%. Other joins keep the group-completeness heuristic.
+    ci_join = parsed.has_joins and join_ci_is_defensible(parsed)
+    use_ci_stop = bool(getattr(parsed, "aggregates", None)) and (
+        not parsed.has_joins or ci_join
+    )
+    if accuracy_target is not None:
+        ci_target_error = max(0.005, min(0.5, 1.0 - float(accuracy_target) / 100.0))
+    else:
+        ci_target_error = float(config["convergence_threshold"])
+    # A single 1% block sample with no interval is exactly the unreliable case
+    # CI stopping exists to fix, so never short-circuit it.
+    single_pass_mode = single_pass_mode and not use_ci_stop
+
+    _plan = resolve_sampling_plan(
+        parsed, source, mode_key, accuracy_target, single_pass_mode=single_pass_mode
+    )
+    config["progression"] = _plan["progression"]
+    config["time_budget_seconds"] = _plan["time_budget_seconds"]
+    join_min_sample_rate = _plan["join_min_sample_rate"]
+    join_rate_diag = _plan["join_rate_diag"]
+    complexity = _plan["complexity"]
 
     start = time.time()
     previous_map: Any = None
