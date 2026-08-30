@@ -94,3 +94,6 @@ PAPER.md
 PAPER_RESULTS.md
 PATENT_NOTES.md
 .paper-local/
+
+# Unpublished patent-readiness / paper notes -- keep local, do NOT publish
+HANDOFF_VERIFICATION.md
