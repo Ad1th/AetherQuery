@@ -438,7 +438,11 @@ def evaluate_sample_accuracy(
     )
 
     agg_cells: list[AggregateCell] = []
-    methods_seen: set[Method] = set()
+    # Per-cell interval method: keep the (tighter) normal approximation for the
+    # cells Cochran's rule says support it, and use the finite-sample bound
+    # only where the skew demands it. Applying the wide bound to the whole grid
+    # because one cell is skewed costs speed for no coverage gain.
+    cell_method: dict[int, Method] = {}
     for group_key, by_alias in cells_by_group.items():
         for agg in parsed.aggregates:
             stats = by_alias.get(agg.alias)
@@ -449,28 +453,19 @@ def evaluate_sample_accuracy(
             # COUNT alone.
             if aggregate is not Aggregate.COUNT and design_effect != stats.design_effect:
                 stats = replace(stats, design_effect=design_effect)
-            methods_seen.add(recommend_method(stats, aggregate).method)
-            agg_cells.append(
-                AggregateCell(
-                    alias=agg.alias,
-                    aggregate=aggregate,
-                    stats=stats,
-                    group_key=group_key if parsed.group_by else None,
-                )
+            cell = AggregateCell(
+                alias=agg.alias,
+                aggregate=aggregate,
+                stats=stats,
+                group_key=group_key if parsed.group_by else None,
             )
+            cell_method[id(cell)] = recommend_method(stats, aggregate).method
+            agg_cells.append(cell)
 
-    # estimate_query applies one interval method across the whole grid. If any
-    # cell is skewed enough that recommend_method wants a finite-sample bound,
-    # use it for all of them rather than under-covering the skewed one.
-    grid_method = (
-        Method.EMPIRICAL_BERNSTEIN
-        if Method.EMPIRICAL_BERNSTEIN in methods_seen
-        else Method.CLT
-    )
     estimate_set = estimate_query(
         agg_cells,
         coverage_level=coverage_level,
-        method=grid_method,
+        method=lambda c: cell_method.get(id(c), Method.CLT),
         correction=(
             Correction.BONFERRONI
             if (multiplicity_correction and len(agg_cells) > 1)

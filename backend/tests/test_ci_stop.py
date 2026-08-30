@@ -175,6 +175,40 @@ def test_non_duckdb_join_ci_delegates_to_single_table_path(monkeypatch):
     assert "result_map" in detail
 
 
+def test_grid_uses_per_cell_interval_method(monkeypatch):
+    """A skewed cell gets the finite-sample bound; a well-behaved cell in the
+    same grid keeps CLT -- the wide bound is not forced on the whole grid."""
+    parsed = parse_analytical_query(
+        "SELECT l_returnflag, SUM(a) AS skewed, SUM(b) AS calm "
+        "FROM lineitem GROUP BY l_returnflag"
+    )
+    ss._POPULATION_CACHE.clear()
+
+    def _exec(sql, source):
+        if "COUNT(*) FROM lineitem" in sql and "rowid" not in sql:
+            return {"columns": ["n"], "rows": [[6_000_000]]}
+        n = 40_000
+        cols = [
+            "l_returnflag", "__aqp_n_bucket", "__aqp_n_domain",
+            "__aqp_sum__skewed", "__aqp_sumxx__skewed", "__aqp_sumxxx__skewed",
+            "__aqp_var__skewed", "__aqp_min__skewed", "__aqp_max__skewed", "__aqp_skew__skewed",
+            "__aqp_sum__calm", "__aqp_sumxx__calm", "__aqp_sumxxx__calm",
+            "__aqp_var__calm", "__aqp_min__calm", "__aqp_max__calm", "__aqp_skew__calm",
+        ]
+        row = ["A", n, n,
+               # skewed: huge skewness_direct, bounded range
+               n * 100.0, n * 1e7, n * 1e12, 1e6, 0.0, 5_000_000.0, 60.0,
+               # calm: near-symmetric, small range
+               n * 25.0, n * 700.0, n * 20000.0, 200.0, 1.0, 50.0, 0.05]
+        return {"columns": cols, "rows": [row]}
+
+    monkeypatch.setattr(ss, "_execute_source_query", _exec)
+    es, met, d = ss.evaluate_sample_accuracy(parsed, "duckdb", 0.01, target_relative_error=0.5)
+    by_alias = {e["alias"]: e["method"] for e in d["ci"]["estimates"]}
+    assert by_alias["skewed"] == "empirical_bernstein"
+    assert by_alias["calm"] == "clt"
+
+
 def test_measure_system_design_effect_is_bounded_and_safe(monkeypatch):
     parsed = parse_analytical_query(
         "SELECT l_returnflag, SUM(l_extendedprice) AS s FROM lineitem GROUP BY l_returnflag"

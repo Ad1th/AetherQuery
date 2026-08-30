@@ -30,7 +30,7 @@ limitation is deliberate, documented, and must not be quietly forgotten.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Sequence
+from typing import Any, Callable, Iterable, Sequence
 
 from backend.stats.contracts import (
     Aggregate,
@@ -165,7 +165,7 @@ class EstimateSet:
 def estimate_query(
     cells: Sequence[AggregateCell] | Iterable[AggregateCell],
     coverage_level: float = DEFAULT_COVERAGE_LEVEL,
-    method: Method = Method.CLT,
+    method: Method | Callable[[AggregateCell], Method] = Method.CLT,
     correction: Correction = Correction.BONFERRONI,
     *,
     fallback_to_clt: bool = True,
@@ -178,11 +178,17 @@ def estimate_query(
     interval is widened to pay for that. With ``Correction.NONE`` it is the
     marginal per-interval level and no simultaneous claim is made.
 
+    ``method`` may be a single ``Method`` applied to every cell, or a callable
+    ``cell -> Method`` so a grid can keep the normal approximation for the
+    cells that support it and use a finite-sample bound only where the skew
+    demands it.
+
     The number of intervals is counted from the cells actually supplied, which
     means it grows as sampling discovers new groups. A correction computed on a
     partially-discovered group set is not valid for the final one; the returned
     notes say so when the risk is present.
     """
+    method_for = method if callable(method) else (lambda _cell: method)
     cell_list = list(cells)
     if not cell_list:
         return EstimateSet(
@@ -222,7 +228,7 @@ def estimate_query(
             cell.aggregate,
             cell.stats,
             per_interval,
-            method,
+            method_for(cell),
             fallback_to_clt=fallback_to_clt,
         )
         estimates.setdefault(cell.group_key, {})[cell.alias] = estimate
