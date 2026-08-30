@@ -94,6 +94,73 @@ def _population_size(table: str, source: str) -> int | None:
     return _POPULATION_CACHE[key]
 
 
+# Exact number of GROUP BY groups in the population, when it can be obtained
+# without a predicate scan. Cached per (source, table, group key, where).
+_GROUP_COUNT_CACHE: dict[tuple[str, str, tuple[str, ...], str | None], int | None] = {}
+
+_IS_NOT_NULL_RE = re.compile(
+    r"^\s*([A-Za-z_][\w.]*)\s+IS\s+NOT\s+NULL\s*$", re.IGNORECASE
+)
+
+
+def _where_is_group_preserving(where: str | None, group_by: list[str]) -> bool:
+    """
+    True when every top-level conjunct of ``where`` is ``<gcol> IS NOT NULL`` for
+    a grouping column. Such a predicate removes no group from
+    ``COUNT(DISTINCT <group key>)``, so an exact population group count is still
+    obtainable without scanning the predicate.
+    """
+    if not where or not where.strip():
+        return True
+    gcols = {g.strip().lower() for g in group_by}
+    gcols |= {g.split(".")[-1].strip().lower() for g in group_by}
+    for conjunct in re.split(r"\s+AND\s+", where, flags=re.IGNORECASE):
+        m = _IS_NOT_NULL_RE.match(conjunct)
+        if not m:
+            return False
+        col = m.group(1).lower()
+        if col not in gcols and col.split(".")[-1] not in gcols:
+            return False
+    return True
+
+
+def expected_group_count(parsed: ParsedQuery, source: str) -> int | None:
+    """
+    Exact number of groups the population produces for this grouped query, or
+    ``None`` when it cannot be had cheaply.
+
+    Returns ``None`` for join queries, ungrouped queries, and grouped queries
+    whose ``WHERE`` clause can drop groups (a predicate on a non-grouping
+    column). When the predicate is absent or is only ``IS NOT NULL`` on the
+    grouping columns, one ``SELECT DISTINCT`` over the grouping key gives the
+    exact count; DuckDB answers this from the column statistics for a
+    low-cardinality dictionary-encoded key.
+    """
+    if parsed.has_joins or not parsed.group_by:
+        return None
+    if not _where_is_group_preserving(parsed.where_clause, parsed.group_by):
+        return None
+    key = (source, parsed.table, tuple(parsed.group_by),
+           parsed.where_clause or None)
+    if key not in _GROUP_COUNT_CACHE:
+        gcols = ", ".join(parsed.group_by)
+        where_sql = (
+            f" WHERE {parsed.where_clause}"
+            if parsed.where_clause and parsed.where_clause.strip()
+            else ""
+        )
+        sql = (
+            f"SELECT COUNT(*) FROM "
+            f"(SELECT DISTINCT {gcols} FROM {parsed.table}{where_sql}) _g"
+        )
+        try:
+            payload = _execute_source_query(sql, source)
+            _GROUP_COUNT_CACHE[key] = int(payload["rows"][0][0])
+        except Exception:
+            _GROUP_COUNT_CACHE[key] = None
+    return _GROUP_COUNT_CACHE[key]
+
+
 def _tablesample_from(table: str, source: str, sample_fraction: float) -> str:
     percent = sample_fraction * 100.0
     if source == "duckdb":
