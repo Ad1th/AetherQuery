@@ -10,6 +10,12 @@ from backend.core.parser import ParsedQuery
 from backend.core.join_sampling import (
     execute_stratified_join_sample,
     estimate_join_complexity_multiplier,
+    hll_guided_join_min_rate,
+)
+from backend.core.sufficient_stats import (
+    evaluate_sample_accuracy,
+    evaluate_join_sample_accuracy,
+    join_ci_is_defensible,
 )
 
 
@@ -228,6 +234,7 @@ def run_runtime_sampling(
     mode: str,
     accuracy_target: float | None = None,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    ci_multiplicity_correction: bool = True,
 ) -> dict[str, Any]:
     mode_key = mode if mode in MODE_CONFIGS else "balanced"
     config = _derive_accuracy_config(mode_key, accuracy_target)
@@ -240,32 +247,55 @@ def run_runtime_sampling(
         and not parsed.has_joins  # Force multi-iteration for JOINs
     )
 
+    # Confidence-interval stopping: stop when a real Bonferroni-corrected CI
+    # over the whole result grid is inside the error budget, not when two
+    # consecutive samples happen to agree (stability is not accuracy).
+    #
+    # Non-JOIN aggregates use the single-table estimators. INNER equi-joins that
+    # are fact -> dimension in shape (join_ci_is_defensible) use the cluster
+    # estimator: the sampled fact table's physical row group is the sampling
+    # unit, so the between-block variance absorbs the 1:N fan-out. A naive 1/f
+    # expansion here was measured to under-cover at 0-60%; the cluster path
+    # measures 95-100%. Other joins keep the group-completeness heuristic.
+    ci_join = parsed.has_joins and join_ci_is_defensible(parsed)
+    use_ci_stop = bool(getattr(parsed, "aggregates", None)) and (
+        not parsed.has_joins or ci_join
+    )
+    if accuracy_target is not None:
+        ci_target_error = max(0.005, min(0.5, 1.0 - float(accuracy_target) / 100.0))
+    else:
+        ci_target_error = float(config["convergence_threshold"])
+    # A single 1% block sample with no interval is exactly the unreliable case
+    # CI stopping exists to fix, so never short-circuit it.
+    single_pass_mode = single_pass_mode and not use_ci_stop
+
     complexity = estimate_query_complexity(parsed)
 
     # Apply JOIN complexity multiplier to time budgets
     join_multiplier = estimate_join_complexity_multiplier(parsed) if parsed.has_joins else 1.0
 
-    # INTELLIGENT SAMPLE RATE SELECTION FOR JOINS
-    # Increase minimum sample rate for JOINs to ensure sufficient matching rows
+    # Starting sample rate for JOIN queries. Sampling one side of a selective
+    # join at 1-2% frequently yields zero matching rows, so the adaptive loop
+    # never sees a usable estimate and still pays full TABLESAMPLE overhead
+    # (slower than exact for no result). A fixed floor scales with the join
+    # count; HyperLogLog cardinality sketches of the join keys then lift it to
+    # whatever rate actually delivers enough matched rows per output group.
+    join_min_sample_rate = 0.0
+    join_rate_diag: dict[str, Any] | None = None
     if parsed.has_joins and not single_pass_mode:
-        # Use HyperLogLog-guided minimum rate based on join cardinality
-        # For now, use conservative minimums (will add HLL prediction later)
         num_joins = len(parsed.joins) if parsed.joins else 0
-
         if num_joins >= 3:
-            # 3+ way joins: start at 10% minimum
-            min_sample_rate = 0.10
+            join_min_sample_rate = 0.10
         elif num_joins >= 2:
-            # 2-way joins: start at 7% minimum
-            min_sample_rate = 0.07
+            join_min_sample_rate = 0.07
         else:
-            # Single join: start at 5% minimum
-            min_sample_rate = 0.05
-
-        # Adjust progression to start at minimum rate
-        config["progression"] = [s for s in config.get("progression", []) if s >= min_sample_rate]
-        if not config["progression"] or config["progression"][0] > min_sample_rate:
-            config["progression"].insert(0, min_sample_rate)
+            join_min_sample_rate = 0.05
+        try:
+            join_min_sample_rate, join_rate_diag = hll_guided_join_min_rate(
+                parsed, source, floor=join_min_sample_rate
+            )
+        except Exception:
+            join_rate_diag = {"method": "fixed_floor", "floor": join_min_sample_rate}
 
     if not single_pass_mode:
         if complexity == "simple":
@@ -288,6 +318,14 @@ def run_runtime_sampling(
                 config["time_budget_seconds"],
                 12.0 * join_multiplier,
             )
+
+        # Apply the JOIN floor last so the complexity presets above cannot
+        # silently drop the progression back down to 1-2% for join queries.
+        if join_min_sample_rate > 0.0:
+            floored = [s for s in config["progression"] if s >= join_min_sample_rate]
+            if not floored or floored[0] > join_min_sample_rate:
+                floored.insert(0, join_min_sample_rate)
+            config["progression"] = floored
     else:
         config["progression"] = [0.01]
 
@@ -297,12 +335,27 @@ def run_runtime_sampling(
     iteration_details: list[dict[str, Any]] = []
     stop_reason = "progression_exhausted"
     final_error: float | None = None
+    max_groups_seen = 0
+    previous_groups_returned: int | None = None
+    # A high-cardinality GROUP BY over a join (one row per customer, say) can
+    # only ever show every group at a near-full scan, so an unbounded "missing
+    # groups -> escalate" rule would make every such query slower than exact.
+    # Chase the missing groups for at most this many iterations, then stop and
+    # report the result as incomplete rather than grinding up to 100%.
+    max_incomplete_iterations = 4
+    # Past this many output groups a query is not an approximation candidate --
+    # you cannot sample your way to hundreds of thousands of distinct group
+    # keys -- so stop early and hand back a labelled best-effort result.
+    aqp_group_ceiling = 50_000
 
     progression = list(config["progression"])
     position = 0
+    last_ci_block: dict[str, Any] | None = None
 
     while position < len(progression):
         sample_fraction = progression[position]
+        ci_met = False
+        ci_max_rel_hw: float | None = None
         if progress_callback is not None:
             progress_callback(
                 {
@@ -318,7 +371,7 @@ def run_runtime_sampling(
             )
 
         # Route to JOIN-specific execution if query contains JOINs
-        if parsed.has_joins:
+        if parsed.has_joins and not ci_join:
             aggregate_payload, query_time, sample_query = execute_stratified_join_sample(
                 parsed,
                 source,
@@ -326,6 +379,48 @@ def run_runtime_sampling(
             )
             rows_sampled = None
             frame_length = 1
+        elif use_ci_stop:
+            _evaluator = evaluate_join_sample_accuracy if ci_join else evaluate_sample_accuracy
+            try:
+                _estimate_set, ci_met, ci_detail = _evaluator(
+                    parsed,
+                    source,
+                    sample_fraction,
+                    coverage_level=0.95,
+                    target_relative_error=ci_target_error,
+                    multiplicity_correction=ci_multiplicity_correction,
+                )
+            except Exception:
+                # Never let the interval layer fail the query: fall back to the
+                # pushed-down sampled aggregate (join-aware) for this iteration
+                # and let the progression / time budget carry the stop decision.
+                was_join = ci_join
+                use_ci_stop = False
+                ci_join = False
+                if was_join:
+                    aggregate_payload, query_time, sample_query = execute_stratified_join_sample(
+                        parsed, source, sample_fraction
+                    )
+                else:
+                    aggregate_payload, query_time, sample_query = fetch_aggregated_sample(
+                        parsed, source, sample_fraction
+                    )
+                rows_sampled = None
+                frame_length = 1
+                ci_met = False
+                ci_max_rel_hw = None
+            else:
+                aggregate_payload = {
+                    "columns": ci_detail["columns"],
+                    "rows": ci_detail["rows"],
+                    "result_map": ci_detail["result_map"],
+                }
+                query_time = ci_detail["query_time"]
+                sample_query = ci_detail["sample_query"]
+                rows_sampled = ci_detail["n_sample"]
+                frame_length = 1
+                ci_max_rel_hw = ci_detail["max_relative_half_width"]
+                last_ci_block = ci_detail["ci"]
         elif getattr(parsed, "aggregates", None):
             aggregate_payload, query_time, sample_query = fetch_aggregated_sample(
                 parsed,
@@ -354,6 +449,27 @@ def run_runtime_sampling(
         )
         elapsed = time.time() - start
 
+        # Track group coverage. For JOIN queries a small sample can miss whole
+        # GROUP BY groups entirely; an answer with fewer groups than a larger
+        # sample already produced is not "converged", it is under-sampled.
+        groups_returned = len(aggregate_payload.get("result_map", {}))
+        max_groups_seen = max(max_groups_seen, groups_returned)
+        # Under-sampled if there are no groups at all, if a bigger sample
+        # already produced more of them, or if the set is still growing
+        # look-to-look (it has not stabilised yet).
+        groups_incomplete = bool(
+            parsed.has_joins
+            and (
+                groups_returned == 0
+                or groups_returned < max_groups_seen
+                or (previous_groups_returned is not None and groups_returned > previous_groups_returned)
+            )
+        )
+        # Keep chasing missing groups only for a bounded number of iterations.
+        completeness_blocks_stop = (
+            groups_incomplete and len(iteration_details) < max_incomplete_iterations
+        )
+
         iteration_detail = {
             "sample_fraction": sample_fraction,
             "rows_sampled": rows_sampled,
@@ -361,6 +477,10 @@ def run_runtime_sampling(
             "elapsed_time": elapsed,
             "convergence_error": None if math.isinf(convergence_error) else convergence_error,
             "confidence": confidence,
+            "ci_met": ci_met,
+            "ci_max_relative_half_width": ci_max_rel_hw,
+            "groups_returned": groups_returned,
+            "groups_incomplete": groups_incomplete,
             "sample_query": sample_query,
         }
         iteration_details.append(iteration_detail)
@@ -377,15 +497,77 @@ def run_runtime_sampling(
 
         final_payload = aggregate_payload
         previous_map = aggregate_payload["result_map"]
+        previous_groups_returned = groups_returned
         final_error = convergence_error
 
         if single_pass_mode:
             stop_reason = "single_pass"
             break
 
+        # Confidence-interval stopping path. For defensible INNER-equi joins the
+        # completeness guard still applies: a small fact sample can miss whole
+        # dimension groups, and a tight interval on the groups it did see says
+        # nothing about the ones it missed.
+        if use_ci_stop:
+            if ci_met and not groups_incomplete:
+                stop_reason = "ci_within_target"
+                break
+            if (
+                elapsed >= config["time_budget_seconds"]
+                and len(iteration_details) >= 2
+                and not groups_incomplete
+            ):
+                stop_reason = "time_budget_exceeded"
+                break
+            if ci_join and groups_incomplete and groups_returned >= aqp_group_ceiling:
+                stop_reason = "groups_incomplete"
+                break
+            # Grow the next sample in proportion to how far the widest interval
+            # still is from the target: far away -> 4x, close -> 1.25x. Drive
+            # the ladder purely off this so the sequence stays monotone. While
+            # dimension groups are still missing, ignore the (misleadingly tight)
+            # interval on the groups seen so far and escalate hard.
+            if groups_incomplete:
+                synth_conf = 0.0
+            elif ci_max_rel_hw and ci_max_rel_hw > 0:
+                synth_conf = max(0.0, min(100.0, (ci_target_error / ci_max_rel_hw) * 100.0))
+            else:
+                synth_conf = 95.0
+            adaptive_next = next_adaptive_sample_fraction(sample_fraction, synth_conf)
+            if adaptive_next is None:
+                stop_reason = "progression_exhausted"
+                break
+            progression[position + 1:] = [adaptive_next]
+            position += 1
+            continue
+
+        # A JOIN result that is still missing groups must not be allowed to
+        # stop on convergence or the time budget: escalate the sample rate
+        # aggressively until the group set stabilises or the budget is spent.
+        if completeness_blocks_stop and sample_fraction < 1.0:
+            forced_next = min(1.0, max(round(sample_fraction * 4.0, 4), 0.25))
+            if forced_next > sample_fraction:
+                if position + 1 >= len(progression) or progression[position + 1] < forced_next:
+                    progression.insert(position + 1, forced_next)
+                position += 1
+                continue
+
+        if parsed.has_joins and groups_returned >= aqp_group_ceiling:
+            # Far too many groups for sampling to ever complete; don't burn
+            # further iterations climbing toward a full scan.
+            stop_reason = "groups_incomplete"
+            break
+
+        if groups_incomplete and not completeness_blocks_stop:
+            # Budget spent and groups still missing: stop here rather than
+            # grinding to a full scan, and label the result for what it is.
+            stop_reason = "groups_incomplete"
+            break
+
         if (
             len(iteration_details) >= 2
             and frame_length > 0
+            and not groups_incomplete
             and not math.isinf(convergence_error)
             and convergence_error < config["convergence_threshold"]
         ):
@@ -395,11 +577,16 @@ def run_runtime_sampling(
         if (
             elapsed >= config["time_budget_seconds"]
             and len(iteration_details) >= 2
+            and not groups_incomplete
         ):
             stop_reason = "time_budget_exceeded"
             break
 
-        if not single_pass_mode:
+        # Skip the confidence-driven refinement step while groups are still
+        # incomplete: convergence_error is meaningless across a changing group
+        # set, so it would otherwise insert a new fraction every iteration and
+        # grind through a dozen samples. Forced escalation above handles it.
+        if not single_pass_mode and not groups_incomplete:
             adaptive_next = next_adaptive_sample_fraction(
                 sample_fraction,
                 confidence,
@@ -417,10 +604,19 @@ def run_runtime_sampling(
         raise RuntimeError("Runtime sampling failed to produce a result")
 
     total_time = time.time() - start
+    last_iter = iteration_details[-1]
     final_confidence = estimate_confidence(
         final_error if final_error is not None else math.inf,
-        iteration_details[-1]["sample_fraction"],
+        last_iter["sample_fraction"],
     )
+    if use_ci_stop:
+        # A genuine coverage statement replaces the pseudo-confidence heuristic.
+        final_confidence = 95.0 if stop_reason == "ci_within_target" else round(
+            min(94.0, 100.0 * (ci_target_error / last_iter["ci_max_relative_half_width"]))
+            if last_iter.get("ci_max_relative_half_width")
+            else 0.0,
+            2,
+        )
     if progress_callback is not None:
         progress_callback(
             {
@@ -443,11 +639,20 @@ def run_runtime_sampling(
         "convergence_error": None if final_error is None or math.isinf(final_error) else final_error,
         "confidence": final_confidence,
         "estimated_error": (
-            None
-            if final_error is None or math.isinf(final_error)
-            else round(final_error * 100.0, 2)
+            round(last_iter["ci_max_relative_half_width"] * 100.0, 3)
+            if use_ci_stop and last_iter.get("ci_max_relative_half_width") is not None
+            else (
+                None
+                if final_error is None or math.isinf(final_error)
+                else round(final_error * 100.0, 2)
+            )
         ),
         "convergence_threshold": config["convergence_threshold"],
+        "target_relative_error": ci_target_error if use_ci_stop else None,
+        "ci": last_ci_block,
+        "join_rate_selection": join_rate_diag,
         "stop_reason": stop_reason,
-        "rewritten_query": iteration_details[-1]["sample_query"],
+        "groups_returned": last_iter["groups_returned"],
+        "groups_incomplete": last_iter["groups_incomplete"],
+        "rewritten_query": last_iter["sample_query"],
     }

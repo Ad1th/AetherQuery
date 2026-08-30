@@ -4,3 +4,4 @@ from aqp_eval.policies.sampling import FixedFractionPolicy
 from aqp_eval.policies.geometric import GeometricPolicy
 from aqp_eval.policies.fixed_ladder import FixedLadderPolicy
 from aqp_eval.policies.online_agg import OnlineAggPolicy
+from aqp_eval.policies.static_ci import StaticCIPolicy

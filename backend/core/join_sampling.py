@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import re
 import time
 from collections import defaultdict
 from typing import Any
@@ -377,6 +378,126 @@ def execute_stratified_join_sample(
     query_time = float(payload.get("time", elapsed))
 
     return aggregate_payload, query_time, sql
+
+
+def _join_key_columns(parsed: ParsedQuery) -> list[tuple[str, str]]:
+    """
+    Pull (table_or_alias, column) pairs out of every ``a.x = b.y`` equality in
+    the ON conditions. Only equi-join keys are useful for cardinality probing.
+    """
+    pairs: list[tuple[str, str]] = []
+    for join in parsed.joins or []:
+        for lhs, rhs in re.findall(
+            r"([a-zA-Z_][\w.]*)\s*=\s*([a-zA-Z_][\w.]*)", join.on_condition
+        ):
+            for token in (lhs, rhs):
+                if "." in token:
+                    tbl, col = token.split(".", 1)
+                    pairs.append((tbl, col))
+    return pairs
+
+
+def hll_guided_join_min_rate(
+    parsed: ParsedQuery,
+    source: str,
+    floor: float,
+    ceiling: float = 0.60,
+    target_rows_per_group: int = 200,
+) -> tuple[float, dict[str, Any]]:
+    """
+    Choose the starting sample fraction for a JOIN from HyperLogLog cardinality
+    sketches of its join keys, rather than a fixed lookup by join count.
+
+    Method:
+      1. Draw a 1% probe of the primary table's join-key column and feed it to
+         a HyperLogLog(2^14) sketch; scale the estimate to the full table.
+      2. Estimate the number of output groups the same way (HLL over the GROUP
+         BY key, or 1 when ungrouped).
+      3. The stratified one-side sample keeps roughly ``rate * N_primary`` rows;
+         spread over the groups that is ``rate * N_primary / n_groups`` rows per
+         group. Solve for the ``rate`` that yields ``target_rows_per_group`` and
+         clamp it to [floor, ceiling].
+
+    Returns (rate, diagnostics). Any probe failure falls back to ``floor``.
+    """
+    diag: dict[str, Any] = {"method": "fixed_floor", "floor": floor}
+    if source != "duckdb" or not parsed.joins:
+        return floor, diag
+
+    key_cols = _join_key_columns(parsed)
+    primary = parsed.table
+    primary_key = next(
+        (col for tbl, col in key_cols if tbl in {primary, primary[:1], primary}),
+        key_cols[0][1] if key_cols else None,
+    )
+    if primary_key is None:
+        return floor, diag
+
+    try:
+        probe_sql = (
+            f"SELECT {primary_key} FROM {primary} "
+            f"TABLESAMPLE SYSTEM (1 PERCENT)"
+        )
+        payload = _execute_source_query(probe_sql, source)
+        rows = payload.get("rows", [])
+        if not rows:
+            return floor, diag
+
+        key_hll = HyperLogLog(precision=14)
+        for (value,) in rows:
+            if value is not None:
+                key_hll.add(value)
+        sampled_distinct = key_hll.cardinality()
+        est_key_cardinality = max(1, int(sampled_distinct / 0.01))
+
+        # Estimate the output group count. The GROUP BY key often lives on a
+        # dimension table, not the primary, so try every table in the query
+        # and take the first that resolves the (unqualified) column.
+        n_groups = 1
+        group_table = None
+        if parsed.group_by:
+            group_col = parsed.group_by[0].split(".")[-1]
+            candidate_tables = [primary] + [j.right_table for j in (parsed.joins or [])]
+            for tbl in candidate_tables:
+                # Sample the fact table (it is large); count dimensions exactly
+                # (they are small and 1% of them is noise).
+                probe = (
+                    f"SELECT approx_count_distinct({group_col}) FROM {tbl} "
+                    f"TABLESAMPLE SYSTEM (1 PERCENT)"
+                    if tbl == primary
+                    else f"SELECT COUNT(DISTINCT {group_col}) FROM {tbl}"
+                )
+                try:
+                    grp_payload = _execute_source_query(probe, source)
+                    n_groups = max(1, int(grp_payload["rows"][0][0] or 1))
+                    group_table = tbl
+                    break
+                except Exception:
+                    continue
+
+        n_primary_payload = _execute_source_query(
+            f"SELECT COUNT(*) FROM {primary}", source
+        )
+        n_primary = max(1, int(n_primary_payload["rows"][0][0]))
+
+        # rows-per-group after a one-sided sample of the primary table
+        rate = (target_rows_per_group * n_groups) / n_primary
+        rate = max(floor, min(ceiling, rate))
+
+        diag = {
+            "method": "hll_guided",
+            "primary_key": primary_key,
+            "est_key_cardinality": est_key_cardinality,
+            "est_groups": n_groups,
+            "group_table": group_table,
+            "n_primary": n_primary,
+            "chosen_rate": round(rate, 4),
+            "floor": floor,
+        }
+        return round(rate, 4), diag
+    except Exception as exc:  # probing is best-effort; never fail the query
+        diag["error"] = f"{type(exc).__name__}: {exc}"
+        return floor, diag
 
 
 def estimate_join_complexity_multiplier(parsed: ParsedQuery) -> float:

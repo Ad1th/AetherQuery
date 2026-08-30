@@ -2,6 +2,27 @@
 
 Unified backend for exact and approximate SQL execution, plan parsing, and plan matching.
 
+## Certified approximate query processing
+
+The `balanced` / `fast` / `accurate` modes stop sampling the moment a
+family-wise confidence interval over the whole result grid is within the
+caller's accuracy target, and fall back to an exact scan rather than return a
+loose interval. Fact→dimension joins get a cluster-sampling interval on the
+fact table's physical row groups.
+
+* **`PAPER.md`** — full draft write-up (method, analysis, evaluation).
+* **`PAPER_RESULTS.md`** — the coverage / speedup / ablation / skew tables.
+* **`PATENT_NOTES.md`** — four mechanism-level claims, all implemented.
+* **`HANDOFF_VERIFICATION.md`** — running verification log.
+* Reproduce: `scripts/reproduce.sh [SF]` or `docker build -t aq . && docker run --rm aq`.
+* Measured artifacts: `aqp_eval/results/engine_coverage_study_{sf1,sf10,skewed}.json`
+  (`_sf1_nocorr.json` is the multiplicity-correction ablation).
+
+Key modules: `backend/core/sufficient_stats.py` (grid CI + cluster-join CI),
+`backend/core/runtime_sampling.py` (adaptive controller),
+`backend/core/join_sampling.py` (HLL rate selection), `backend/stats/`
+(estimator library, 215 tests via `pytest`).
+
 ## Structure
 
 - backend: FastAPI backend with modular engines and APIs

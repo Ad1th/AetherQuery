@@ -319,29 +319,288 @@ def predict_required_sample_size(
         return 0.10
 
 
+def _geometric_progression(
+    start_fraction: float,
+    max_iterations: int,
+    growth: float = 2.5,
+) -> list[float]:
+    """Geometric ladder of sample fractions from ``start_fraction`` up to 1.0."""
+    fractions: list[float] = []
+    fraction = max(0.001, min(1.0, start_fraction))
+    for _ in range(max(1, max_iterations)):
+        fractions.append(round(fraction, 4))
+        if fraction >= 1.0:
+            break
+        fraction = min(1.0, fraction * growth)
+    if fractions[-1] < 1.0 and len(fractions) < max_iterations:
+        fractions.append(1.0)
+    return fractions
+
+
+def _build_bounded_sample_sql(parsed_query, source: str, sample_fraction: float) -> str:
+    """
+    Build a pushed-down sampled aggregate query that also returns the per-group
+    sample size and, for SUM/AVG, the value range and dispersion needed to form
+    a Hoeffding / CLT interval.
+    """
+    percent = sample_fraction * 100.0
+    if source == "duckdb":
+        from_clause = f"{parsed_query.table} TABLESAMPLE SYSTEM ({percent:.4f} PERCENT)"
+    elif source == "postgres":
+        from_clause = (
+            f"(SELECT * FROM {parsed_query.table} "
+            f"TABLESAMPLE SYSTEM ({percent:.4f})) AS sampled_source"
+        )
+    else:  # mysql: no TABLESAMPLE, fall back to a row-level predicate
+        from_clause = parsed_query.table
+
+    select_parts: list[str] = list(parsed_query.group_by)
+    select_parts.append("COUNT(*) AS __aqp_n")
+
+    for aggregate in parsed_query.aggregates:
+        if aggregate.is_count_star:
+            select_parts.append(f"COUNT(*) AS {aggregate.alias}")
+            continue
+        expr = aggregate.expression
+        func = aggregate.func.upper()
+        select_parts.append(f"{func}({expr}) AS {aggregate.alias}")
+        if aggregate.func.lower() == "sum":
+            select_parts.append(f"MIN({expr}) AS __aqp_min__{aggregate.alias}")
+            select_parts.append(f"MAX({expr}) AS __aqp_max__{aggregate.alias}")
+        elif aggregate.func.lower() == "avg":
+            select_parts.append(f"STDDEV_SAMP({expr}) AS __aqp_std__{aggregate.alias}")
+
+    sql = f"SELECT {', '.join(select_parts)} FROM {from_clause}"
+
+    where_parts: list[str] = []
+    if parsed_query.where_clause:
+        where_parts.append(f"({parsed_query.where_clause})")
+    if source == "mysql":
+        where_parts.append(f"(RAND() < {sample_fraction:.8f})")
+    if where_parts:
+        sql += f" WHERE {' AND '.join(where_parts)}"
+
+    if parsed_query.group_by:
+        sql += f" GROUP BY {', '.join(parsed_query.group_by)}"
+
+    return sql
+
+
+def _group_error_bounds(
+    row: dict[str, Any],
+    parsed_query,
+    sample_fraction: float,
+    confidence_level: float,
+    target_error: float,
+) -> dict[str, dict[str, float]]:
+    """Compute an interval and relative-error bound for every aggregate in one group."""
+    n_sampled = int(row.get("__aqp_n") or 0)
+    bounds: dict[str, dict[str, float]] = {}
+
+    for aggregate in parsed_query.aggregates:
+        alias = aggregate.alias
+        if alias not in row or row[alias] is None:
+            continue
+        raw_value = float(row[alias])
+        func = aggregate.func.lower()
+
+        if func == "count":
+            scaled = raw_value / sample_fraction
+            lower, upper = hoeffding_bound_count(
+                int(raw_value), sample_fraction, confidence_level, table_size_estimate=None
+            )
+        elif func == "sum":
+            scaled = raw_value / sample_fraction
+            value_min = row.get(f"__aqp_min__{alias}")
+            value_max = row.get(f"__aqp_max__{alias}")
+            if value_min is None or value_max is None:
+                value_min, value_max = 0.0, raw_value
+            lower, upper = hoeffding_bound_sum(
+                raw_value,
+                sample_fraction,
+                (float(value_min), float(value_max)),
+                confidence_level,
+                n_sampled=n_sampled,
+            )
+        elif func == "avg":
+            scaled = raw_value
+            stddev = row.get(f"__aqp_std__{alias}")
+            stddev = float(stddev) if stddev is not None else abs(raw_value) * 0.5
+            lower, upper = clt_bound_avg(raw_value, stddev, n_sampled, confidence_level)
+        else:
+            continue
+
+        rel_error = compute_relative_error_bound(scaled, lower, upper)
+        bounds[alias] = {
+            "estimate": scaled,
+            "lower": lower,
+            "upper": upper,
+            "relative_error": rel_error,
+            "n_sampled": n_sampled,
+            "meets_target": rel_error <= target_error,
+        }
+
+    return bounds
+
+
 def progressive_refinement_with_bounds(
     parsed_query,
     source: str,
     target_error: float = 0.05,
     confidence_level: float = 0.95,
     max_iterations: int = 10,
+    progression: list[float] | None = None,
 ) -> dict[str, Any]:
     """
-    Execute progressive refinement with error bound checking.
+    Execute progressive refinement with error-bound checking.
 
-    Increases sample size until error bounds meet target or max iterations reached.
-
-    This is the core algorithm for adaptive approximate queries with guarantees.
+    Increases the sample fraction until every aggregate in every group has a
+    relative-error bound at or below ``target_error`` (at ``confidence_level``),
+    or until the ladder / iteration budget is exhausted.
 
     Algorithm:
-        1. Start with predicted sample size based on target error
-        2. Execute query on sample
-        3. Compute error bounds for all aggregates
-        4. If bounds meet target: STOP and return
-        5. Else: increase sample size and repeat
+        1. Start from the sample size predicted by the inverted Hoeffding bound.
+        2. Execute the pushed-down sampled aggregate on that fraction.
+        3. Form a Hoeffding / CLT interval for each aggregate cell.
+        4. If the widest relative-error bound meets the target: STOP.
+        5. Otherwise grow the sample fraction and repeat.
+
+    JOIN queries are out of scope: scaling a one-sided join sample by 1/f is not
+    unbiased in general and join-key multiplicity adds variance these bounds do
+    not model. Callers get an explicit ``ValueError`` rather than a wrong number.
 
     Returns:
-        Query result with error bounds
+        {
+          "columns", "rows",              # scaled result grid
+          "result_map",                   # {group_key_str: {alias: value}}
+          "error_bounds",                 # {group_key_str: {alias: {...}}}
+          "meets_target", "max_relative_error",
+          "sample_rate", "iterations", "stop_reason",
+          "target_error", "confidence_level", "approx": True,
+        }
     """
-    # Implementation stub - would integrate into runtime_sampling.py
-    raise NotImplementedError("Integration with runtime_sampling pending")
+    from backend.core.executor import _execute_source_query
+
+    if getattr(parsed_query, "has_joins", False):
+        raise ValueError(
+            "progressive_refinement_with_bounds does not cover JOIN queries; "
+            "use runtime_sampling.run_runtime_sampling for joins"
+        )
+    if not getattr(parsed_query, "aggregates", None):
+        raise ValueError("progressive_refinement_with_bounds requires an aggregate query")
+
+    if progression is None:
+        dominant = "count"
+        for aggregate in parsed_query.aggregates:
+            if aggregate.func.lower() == "avg":
+                dominant = "avg"
+                break
+        start_fraction = predict_required_sample_size(
+            target_error, confidence_level, aggregate_type=dominant
+        )
+        progression = _geometric_progression(start_fraction, max_iterations)
+    else:
+        progression = [round(max(0.001, min(1.0, f)), 4) for f in progression]
+
+    iterations: list[dict[str, Any]] = []
+    columns: list[str] = []
+    result_map: dict[str, dict[str, Any]] = {}
+    error_bounds: dict[str, dict[str, dict[str, float]]] = {}
+    stop_reason = "progression_exhausted"
+    max_relative_error: float | None = None
+    meets_target = False
+
+    for iteration_index, sample_fraction in enumerate(progression):
+        sql = _build_bounded_sample_sql(parsed_query, source, sample_fraction)
+        payload = _execute_source_query(sql, source)
+        raw_columns = payload.get("columns", [])
+        raw_rows = payload.get("rows", [])
+
+        result_map = {}
+        error_bounds = {}
+        iteration_max_error: float | None = None
+        groups_meeting = 0
+
+        for row_values in raw_rows:
+            row = dict(zip(raw_columns, row_values))
+            group_bounds = _group_error_bounds(
+                row, parsed_query, sample_fraction, confidence_level, target_error
+            )
+
+            scaled_row: dict[str, Any] = {}
+            for column in parsed_query.group_by:
+                scaled_row[column] = row.get(column)
+            for aggregate in parsed_query.aggregates:
+                cell = group_bounds.get(aggregate.alias)
+                if cell is not None:
+                    scaled_row[aggregate.alias] = cell["estimate"]
+                else:
+                    scaled_row[aggregate.alias] = row.get(aggregate.alias)
+
+            if parsed_query.group_by:
+                key = str(tuple(row.get(column) for column in parsed_query.group_by))
+            else:
+                key = "__ungrouped__"
+
+            result_map[key] = scaled_row
+            error_bounds[key] = group_bounds
+
+            group_errors = [
+                cell["relative_error"]
+                for cell in group_bounds.values()
+                if math.isfinite(cell["relative_error"])
+            ]
+            if group_errors:
+                group_worst = max(group_errors)
+                iteration_max_error = (
+                    group_worst
+                    if iteration_max_error is None
+                    else max(iteration_max_error, group_worst)
+                )
+            if group_bounds and all(cell["meets_target"] for cell in group_bounds.values()):
+                groups_meeting += 1
+
+        columns = list(parsed_query.group_by) + [a.alias for a in parsed_query.aggregates]
+        max_relative_error = iteration_max_error
+        meets_target = (
+            len(result_map) > 0
+            and groups_meeting == len(result_map)
+            and iteration_max_error is not None
+        )
+
+        iterations.append(
+            {
+                "sample_fraction": sample_fraction,
+                "groups_returned": len(result_map),
+                "groups_meeting_target": groups_meeting,
+                "max_relative_error": iteration_max_error,
+                "sample_query": sql,
+            }
+        )
+
+        if meets_target:
+            stop_reason = "error_bound_met"
+            break
+        if sample_fraction >= 1.0:
+            stop_reason = "full_scan"
+            break
+        if iteration_index + 1 >= max_iterations:
+            stop_reason = "max_iterations"
+            break
+
+    rows = [[entry[column] for column in columns] for entry in result_map.values()]
+
+    return {
+        "columns": columns,
+        "rows": rows,
+        "result_map": result_map,
+        "error_bounds": error_bounds,
+        "meets_target": meets_target,
+        "max_relative_error": max_relative_error,
+        "sample_rate": iterations[-1]["sample_fraction"] if iterations else None,
+        "iterations": iterations,
+        "stop_reason": stop_reason,
+        "target_error": target_error,
+        "confidence_level": confidence_level,
+        "approx": True,
+    }
