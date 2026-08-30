@@ -88,15 +88,17 @@ that is 79/90 covered cells over 30 trials, inside the Wilson band for nominal
 
 | query | e=4% | e=5% | e=1% | speedup |
 |---|---|---|---|---|
-| `COUNT(*)` by segment, `customer join orders` (1:N) | 98.0 | 98.0 | 98.7 | **5.0-5.8x** |
-| `SUM(price)` by nation, 4-way star (N:1)            | 99.7 | 99.9 | 99.7 | 0.6-1.4x |
-| `COUNT(*)` by shipmode, `lineitem join orders` (N:1)| 98.6 | 100  | 99.5 | ~0.5x |
+| `COUNT(*)` by segment, `customer join orders` (1:N) | 98.0 | 98.0 | 100  | **4.9-5.5x** |
+| `SUM(price)` by nation, 4-way star (N:1)            | 100  | 100  | 100  | **1.0-1.5x** |
+| `COUNT(*)` by shipmode, `lineitem join orders` (N:1)| 99.5 | 100  | 100  | ~0.9x |
 
-The 1:N join that dipped to ~90% at SF1 recovers to **98%** at SF10 (730 vs 73
-fact row groups) and runs **5x faster than exact**. Every join configuration
-is >= 98%. The fact-side star joins are around 1x because the block-grouped
-query over the ~30k-block `lineitem` sample costs about as much as the
-already-fast exact join -- an implementation cost, not a statistical one.
+Every join configuration is >= 98%. The 1:N join runs 5x faster than exact
+(sampling the "one" side shrinks the join). The SQL-summarised cluster
+estimator (section 5) removed the Python per-block cost -- profiled 0.70 s ->
+0.001 s per look for a 25-nation star join -- moving the fact-side joins from
+~0.5x (slower than exact) to parity. The remaining floor is the sampled join
+itself: a 5-30% fact sample still joins the full dimensions, re-drawn each
+look; nesting the samples would remove that.
 
 ## 5. Fact→dimension joins (TPC-H SF1, 40 trials)
 

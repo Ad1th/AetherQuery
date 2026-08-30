@@ -268,13 +268,17 @@ fact row groups. The effective design effect is large; an SRS-variance
 interval is far too tight. Measured coverage of the naive approach on
 `customer ⋈ orders … GROUP BY c_mktsegment`: **0–60% vs a nominal 95%**.
 
-**The cluster construction.** `build_join_block_stats_sql` groups the joined
-result by `fact.rowid // 2048` *and* the query's `GROUP BY`, returning per
-(block, group) the row count, in-domain count, and `SUM(x)`, `SUM(x*x)`. For
-each output group we build a `ClusterSampleStats` over **every sampled fact row
-group** — a zero-valued `BlockAggregate` where the group is absent from a
-block, so a sparse group's sampling fraction is computed over all sampled
-blocks, not just the ones it landed in. Then `estimate_clustered`:
+**The cluster construction.** An inner query groups the joined result by
+`fact.rowid // 2048` *and* the query's `GROUP BY` to form per-(block, group)
+block totals; an outer query aggregates those per output group into the block
+count `m`, `Σ t_b`, `Σ t_b²`, and the row/domain counts — **one row per output
+group**, so the interval is assembled with no per-block work
+(`build_join_block_summary_sql`, for `COUNT`/`SUM`; `AVG` uses a row-assembly
+path). The absent-block zeros are folded into the variance analytically by
+using `m_total` (all sampled blocks) as the denominator:
+`s_t² = (Σ t_b² − (Σ t_b)² / m_total) / (m_total − 1)`, so a sparse group's
+sampling fraction is computed over every sampled block, not just the ones it
+landed in. Then:
 
     Ŷ = (M/m) · Σ (block totals),   Var = M² (1 − m/M) s_t² / m
 
@@ -284,12 +288,16 @@ of the per-block totals. The interval rests on `m − 1` degrees of freedom, not
 blocks` guard blocks a stop while `s_t²` is itself poorly determined.
 
 **Result.** Coverage on three INNER-equi joins (1:N `COUNT`, 4-way star `SUM`,
-N:1 `COUNT`): **98.9–100% at SF10** across all ε. At SF1 the 1:N join dips to
+N:1 `COUNT`): **98–100% at SF10** across all ε. At SF1 the 1:N join dips to
 ~90–96% because `customer` is only ~73 row groups; the star joins hold nominal
-at every scale. Join speedup is 4–5× for the 1:N join and 0.3–0.7× for
-fact-side star joins (the block-grouped query over a ~30k-block `lineitem`
-sample costs more than the already-fast exact join — an implementation cost,
-not a statistical one).
+at every scale. Speedup: **5× for the 1:N join** (sampling the "one" side
+genuinely shrinks the join), **1.0–1.5× for the 4-way star `SUM`**, ~0.9× for
+the N:1 fact-side `COUNT` — the SQL-summarised estimator removed the Python
+per-block cost (profiled 0.70 s → 0.001 s per look for a 25-nation star join),
+leaving the sampled *join itself* as the floor: a 5–30% fact sample still
+joins the full dimensions, and the adaptive loop re-joins on each look.
+Nesting the samples (accumulating rows rather than re-drawing) would remove
+the re-join and is future work.
 
 Other join shapes (outer, non-equi, M:N) get no interval; they keep the
 completeness heuristic (§6) and are labelled `groups_incomplete` when
@@ -441,8 +449,8 @@ the designed failure mode — never a confident wrong interval.
 ### 8.5 Joins
 
 INNER-equi joins, cluster estimator (§5). **SF10** (30 trials): 1:N `COUNT`
-98.0–98.7% (**5× faster than exact**), 4-way star `SUM` 99.7–99.9% (0.6–1.4×),
-N:1 `COUNT` 98.6–100% (~0.5×). **SF1**: star/N:1 joins 98.6–100%; the 1:N join
+98–100% (**5× faster than exact**), 4-way star `SUM` 100% (**1.0–1.5×**),
+N:1 `COUNT` 99.5–100% (~0.9×). **SF1**: star/N:1 joins 98–100%; the 1:N join
 90–96% (`customer` ≈ 73 row groups, so `s_t²` is noisy — the `min 20 blocks`
 guard lifts ε=5% from 86% to 96%). Naive-expansion baseline on the 1:N join:
 0–60%.
