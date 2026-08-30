@@ -244,20 +244,23 @@ def test_join_sample_accuracy_uses_cluster_estimator(monkeypatch):
     )
     ss._POPULATION_CACHE.clear()
 
-    # 40 fact blocks sampled, two mktsegments, ~500 joined rows per (block,group)
-    block_rows = []
-    for blk in range(40):
-        for seg in ("BUILDING", "AUTOMOBILE"):
-            block_rows.append({
-                "__aqp_blk": blk, "__aqp_grp_0": seg,
-                "__aqp_n_rows": 500 + (blk % 7) * 20, "__aqp_n_domain": 500 + (blk % 7) * 20,
-            })
-    cols = list(block_rows[0].keys())
+    # SQL-summarised shape: one row per output group. 40 fact blocks, per-block
+    # in-domain count ~500 -> block total sum = 40*500, sum of squares = 40*500^2.
+    m_total, per_block = 40, 500
+    summary = {
+        "columns": ["__g0", "__m_g", "__m_total", "__n_rows", "__n_domain",
+                    "__ct_t", "__ct_tt"],
+        "rows": [
+            [seg, m_total, m_total, m_total * per_block, m_total * per_block,
+             m_total * per_block, m_total * (per_block ** 2) * 1.02]
+            for seg in ("BUILDING", "AUTOMOBILE")
+        ],
+    }
 
     def _exec(sql, source):
         if "COUNT(*) FROM customer" in sql and "rowid" not in sql:
             return {"columns": ["n"], "rows": [[150_000]]}
-        return {"columns": cols, "rows": [[r[c] for c in cols] for r in block_rows]}
+        return summary
 
     monkeypatch.setattr(ss, "_execute_source_query", _exec)
 
@@ -269,8 +272,7 @@ def test_join_sample_accuracy_uses_cluster_estimator(monkeypatch):
     assert detail["blocks_sampled"] == 40
     for e in detail["ci"]["estimates"]:
         assert e["ci_low"] < e["estimate"] < e["ci_high"]
-        # df from blocks, not rows
-        assert e["n_domain"] > 40
+        assert e["n_domain"] > 40  # scaled up from the block totals
 
 
 def test_grouped_sum_interval_tightens_with_fraction(monkeypatch):

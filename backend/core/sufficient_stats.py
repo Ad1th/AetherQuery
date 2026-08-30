@@ -512,7 +512,8 @@ def build_join_block_stats_sql(
     """
     Sampled join, grouped by the fact table's physical row group as well as the
     query's GROUP BY, returning per (block, group): row count, in-domain count,
-    and SUM / SUM(x^2) of each aggregate's column.
+    and SUM / SUM(x^2) of each aggregate's column. Used by the AVG-in-join
+    fallback path; the COUNT/SUM fast path uses build_join_block_summary_sql.
     """
     fact = _fact_alias(parsed)
     where = parsed.where_clause
@@ -540,6 +541,195 @@ def build_join_block_stats_sql(
     group_keys = ["__aqp_blk"] + [f"__aqp_grp_{i}" for i in range(len(parsed.group_by))]
     sql += f" GROUP BY {', '.join(group_keys)}"
     return sql
+
+
+def build_join_block_summary_sql(
+    parsed: ParsedQuery, source: str, sample_fraction: float
+) -> str:
+    """
+    The cluster estimator's sufficient statistics computed *entirely in SQL*:
+    an inner query forms per (fact row group, output group) block totals, and
+    the outer query aggregates them per output group into the block count, the
+    sum and sum-of-squares of the block totals (what the between-block variance
+    needs), and the row/domain counts. One row per output group comes back --
+    not one per (block, group) -- so the Python side does no per-block work.
+    Only COUNT/SUM aggregates; AVG uses the row-assembly path.
+    """
+    fact = _fact_alias(parsed)
+    where = parsed.where_clause
+    filt = f" FILTER (WHERE {where})" if where else ""
+    blk_id = f"({fact}.rowid // {DUCKDB_VECTOR_SIZE})"
+    grp_cols = [f"__g{i}" for i in range(len(parsed.group_by))]
+
+    inner_sel = [f"{blk_id} AS __blk"]
+    inner_sel += [f"{expr} AS __g{i}" for i, expr in enumerate(parsed.group_by)]
+    inner_sel.append("COUNT(*) AS __nr")
+    inner_sel.append(f"COUNT(*){filt} AS __nd")
+    for agg in parsed.aggregates:
+        if agg.is_count_star:
+            continue
+        col = _col_expr(agg.expression)
+        inner_sel.append(f"SUM({col}){filt} AS __t_{agg.alias}")
+    inner_group = ["__blk"] + grp_cols
+    inner = (
+        f"SELECT {', '.join(inner_sel)} "
+        f"FROM {_join_from_clause(parsed, source, sample_fraction)} "
+        f"GROUP BY {', '.join(inner_group)}"
+    )
+
+    outer_sel = list(grp_cols)
+    outer_sel.append("COUNT(*) AS __m_g")
+    outer_sel.append("(SELECT COUNT(DISTINCT __blk) FROM __b) AS __m_total")
+    outer_sel.append("SUM(__nr) AS __n_rows")
+    outer_sel.append("SUM(__nd) AS __n_domain")
+    outer_sel.append("SUM(__nd) AS __ct_t")
+    outer_sel.append("SUM(__nd * __nd) AS __ct_tt")
+    for agg in parsed.aggregates:
+        if agg.is_count_star:
+            continue
+        outer_sel.append(f"SUM(__t_{agg.alias}) AS __sum_t_{agg.alias}")
+        outer_sel.append(f"SUM(__t_{agg.alias} * __t_{agg.alias}) AS __sum_tt_{agg.alias}")
+
+    outer = (
+        f"WITH __b AS ({inner}) SELECT {', '.join(outer_sel)} FROM __b"
+    )
+    if grp_cols:
+        outer += f" GROUP BY {', '.join(grp_cols)}"
+    return outer
+
+
+def _cluster_interval_from_block_totals(
+    aggregate: Aggregate,
+    sum_t: float,
+    sum_tt: float,
+    m_total: int,
+    total_blocks: int,
+    per_interval: float,
+    n_sample: int,
+    n_domain: int,
+) -> "Estimate":
+    """
+    Build a CLUSTER_CLT Estimate directly from Sum(block totals) and
+    Sum(block totals^2), with the fact row group as the sampling unit. The
+    absent-block zeros are folded in by using m_total (all sampled blocks) as
+    the denominator: Var(block totals) = (sum_tt - sum_t^2 / m_total)/(m_total-1).
+    """
+    from backend.stats.contracts import Estimate
+    from backend.stats.intervals import clt_half_width
+
+    f = m_total / total_blocks if total_blocks else 1.0
+    point = sum_t / f if f > 0 else 0.0
+    if m_total < 2:
+        return Estimate(
+            aggregate=aggregate, estimate=point, variance=None, standard_error=None,
+            ci_low=None, ci_high=None, half_width=None, relative_half_width=None,
+            coverage_level=per_interval, method=Method.CLUSTER_CLT,
+            n_sample=n_sample, n_domain=n_domain, fraction=f,
+            notes=(f"only {m_total} sampled block(s); no between-block variance",),
+        )
+    s_t2 = max(0.0, (sum_tt - (sum_t * sum_t) / m_total) / (m_total - 1))
+    block_fpc = max(0.0, 1.0 - f)
+    variance = (total_blocks ** 2) * block_fpc * s_t2 / m_total
+    hw = clt_half_width(variance, per_interval, degrees_of_freedom=m_total - 1)
+    ci_low = point - hw if hw is not None else None
+    ci_high = point + hw if hw is not None else None
+    if ci_low is not None and aggregate is Aggregate.COUNT:
+        ci_low = max(0.0, ci_low)
+    rel_hw = (hw / abs(point)) if (hw is not None and point != 0) else None
+    return Estimate(
+        aggregate=aggregate, estimate=point, variance=variance,
+        standard_error=math.sqrt(variance) if variance >= 0 else None,
+        ci_low=ci_low, ci_high=ci_high, half_width=hw, relative_half_width=rel_hw,
+        coverage_level=per_interval, method=Method.CLUSTER_CLT,
+        n_sample=n_sample, n_domain=n_domain, fraction=f,
+        notes=(f"cluster estimator over {m_total} fact row groups",),
+    )
+
+
+def _evaluate_join_summary(
+    parsed, source, sample_fraction, fact_pop, total_blocks,
+    coverage_level, target_relative_error, corr,
+):
+    """SQL-summarised cluster-join CI (no AVG). One row per output group."""
+    sql = build_join_block_summary_sql(parsed, source, sample_fraction)
+    start = time.perf_counter()
+    payload = _execute_source_query(sql, source)
+    query_time = float(payload.get("time", time.perf_counter() - start))
+    cols = payload.get("columns", [])
+    rows = [dict(zip(cols, r)) for r in payload.get("rows", [])]
+    ngrp = len(parsed.group_by)
+    columns = list(parsed.group_by) + [a.alias for a in parsed.aggregates]
+
+    if not rows:
+        empty = EstimateSet(
+            estimates={}, per_interval_coverage=coverage_level,
+            family_wise_coverage=coverage_level, correction=corr,
+            num_intervals=0, notes=("join sample returned no rows",),
+        )
+        return empty, False, {
+            "columns": columns, "rows": [], "result_map": {}, "n_sample": 1,
+            "blocks_sampled": 0, "sample_query": sql, "query_time": query_time,
+            "max_relative_half_width": None, "unresolved_cells": 0,
+            "ci": empty.to_dict(),
+        }
+
+    m_total = max(1, int(rows[0].get("__m_total") or 1))
+    n_sample = max(1, sum(int(r.get("__n_rows") or 0) for r in rows))
+    non_count = [a for a in parsed.aggregates if not a.is_count_star]
+    num_intervals = max(1, len(rows) * max(1, len(parsed.aggregates)))
+    per_interval = adjust_coverage_level(coverage_level, num_intervals, corr)
+
+    estimates: dict[Any, dict[str, Any]] = {}
+    result_map: dict[str, Any] = {}
+    for r in rows:
+        gk = tuple(r.get(f"__g{i}") for i in range(ngrp))
+        key = gk if ngrp else None
+        n_domain = int(r.get("__n_domain") or 0)
+        by_alias: dict[str, Any] = {}
+        for agg in parsed.aggregates:
+            if agg.is_count_star:
+                sum_t = float(r.get("__ct_t") or 0.0)
+                sum_tt = float(r.get("__ct_tt") or 0.0)
+                aggregate = Aggregate.COUNT
+            else:
+                sum_t = float(r.get(f"__sum_t_{agg.alias}") or 0.0)
+                sum_tt = float(r.get(f"__sum_tt_{agg.alias}") or 0.0)
+                aggregate = Aggregate.SUM
+            by_alias[agg.alias] = _cluster_interval_from_block_totals(
+                aggregate, sum_t, sum_tt, m_total, total_blocks,
+                per_interval, n_sample, n_domain,
+            )
+        estimates[key] = by_alias
+        row_out: dict[str, Any] = {}
+        if ngrp:
+            for col, val in zip(parsed.group_by, gk):
+                row_out[col] = val
+        for agg in parsed.aggregates:
+            row_out[agg.alias] = by_alias[agg.alias].estimate
+        rk = str(tuple(row_out.get(c) for c in parsed.group_by)) if ngrp else "row_0"
+        result_map[rk] = row_out
+
+    estimate_set = EstimateSet(
+        estimates=estimates, per_interval_coverage=per_interval,
+        family_wise_coverage=coverage_level, correction=corr,
+        num_intervals=num_intervals,
+        notes=("cluster estimator (SQL-summarised): the sampled fact table's "
+               "row group is the sampling unit",),
+    )
+    met = estimate_set.meets_target(target_relative_error)
+    if met and m_total < min(20, total_blocks):
+        met = False
+
+    out_rows = [[entry.get(col) for col in columns] for entry in result_map.values()]
+    detail = {
+        "columns": columns, "rows": out_rows, "result_map": result_map,
+        "n_sample": n_sample, "blocks_sampled": m_total,
+        "sample_query": sql, "query_time": query_time,
+        "max_relative_half_width": estimate_set.max_relative_half_width,
+        "unresolved_cells": len(estimate_set.unresolved),
+        "ci": estimate_set.to_dict(),
+    }
+    return estimate_set, bool(met), detail
 
 
 def evaluate_join_sample_accuracy(
@@ -572,6 +762,18 @@ def evaluate_join_sample_accuracy(
 
     _corr = Correction.BONFERRONI if multiplicity_correction else Correction.NONE
     total_blocks = max(1, math.ceil(fact_pop / DUCKDB_VECTOR_SIZE))
+
+    # Fast path: no AVG -> the whole cluster estimator is expressible in SQL
+    # (one row per output group, no per-block Python).
+    if not any(a.func.lower() == "avg" for a in parsed.aggregates):
+        try:
+            return _evaluate_join_summary(
+                parsed, source, sample_fraction, fact_pop, total_blocks,
+                coverage_level, target_relative_error, _corr,
+            )
+        except Exception:
+            pass  # fall through to the row-assembly path
+
     sql = build_join_block_stats_sql(parsed, source, sample_fraction)
     start = time.perf_counter()
     try:
