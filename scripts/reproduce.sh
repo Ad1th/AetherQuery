@@ -41,4 +41,9 @@ echo; echo ">>> end-to-end coverage / error / speedup study"
   --database "$DB" --trials 40 \
   --output "aqp_eval/results/engine_coverage_study_sf${SF}.json"
 
+echo; echo ">>> controller vs fixed sampling vs per-cell stopping"
+"$PY" scripts/run_baseline_comparison.py \
+  --database "$DB" --trials "${TRIALS:-120}" \
+  --output "aqp_eval/results/baseline_comparison_sf${SF}.json"
+
 echo; echo ">>> done. artifacts in aqp_eval/results/"

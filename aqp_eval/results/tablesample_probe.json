@@ -1,0 +1,157 @@
+{
+  "provenance": {
+    "generated_utc": "2026-08-30T22:34:16.939739+00:00",
+    "engine_git_sha": "897b5684550b1509b65772f68c16328d1976b557",
+    "duckdb_version": "1.5.1",
+    "python_version": "3.14.7",
+    "host": "macOS-26.5.2-arm64-arm-64bit-Mach-O",
+    "block_size_assumed": 2048,
+    "experiment": "tablesample_contiguity_and_realized_fraction"
+  },
+  "records": [
+    {
+      "database": "/Users/adith/Documents/Dev/Projects/AetherQuery/aqp_eval/datasets/nyctaxi.duckdb",
+      "table": "trips",
+      "population": 2964624,
+      "method": "SYSTEM",
+      "requested_pct": 1.0,
+      "realized_pct": 1.3125441877283595,
+      "n": 38912,
+      "contiguous_pct": 99.951171875,
+      "runs": 19,
+      "run_starts_block_aligned": 19
+    },
+    {
+      "database": "/Users/adith/Documents/Dev/Projects/AetherQuery/aqp_eval/datasets/nyctaxi.duckdb",
+      "table": "trips",
+      "population": 2964624,
+      "method": "SYSTEM",
+      "requested_pct": 5.0,
+      "realized_pct": 5.319258023951773,
+      "n": 157696,
+      "contiguous_pct": 99.95244013798701,
+      "runs": 75,
+      "run_starts_block_aligned": 75
+    },
+    {
+      "database": "/Users/adith/Documents/Dev/Projects/AetherQuery/aqp_eval/datasets/nyctaxi.duckdb",
+      "table": "trips",
+      "population": 2964624,
+      "method": "SYSTEM",
+      "requested_pct": 10.0,
+      "realized_pct": 10.983922413095218,
+      "n": 325632,
+      "contiguous_pct": 99.95700668238993,
+      "runs": 140,
+      "run_starts_block_aligned": 140
+    },
+    {
+      "database": "/Users/adith/Documents/Dev/Projects/AetherQuery/aqp_eval/datasets/nyctaxi.duckdb",
+      "table": "trips",
+      "population": 2964624,
+      "method": "BERNOULLI",
+      "requested_pct": 1.0,
+      "realized_pct": 0.9981704256593753,
+      "n": 29592,
+      "contiguous_pct": 0.9968910516355772,
+      "runs": 29297,
+      "run_starts_block_aligned": 13
+    },
+    {
+      "database": "/Users/adith/Documents/Dev/Projects/AetherQuery/aqp_eval/datasets/nyctaxi.duckdb",
+      "table": "trips",
+      "population": 2964624,
+      "method": "BERNOULLI",
+      "requested_pct": 5.0,
+      "realized_pct": 5.000195640324034,
+      "n": 148237,
+      "contiguous_pct": 4.985260090260866,
+      "runs": 140847,
+      "run_starts_block_aligned": 79
+    },
+    {
+      "database": "/Users/adith/Documents/Dev/Projects/AetherQuery/aqp_eval/datasets/nyctaxi.duckdb",
+      "table": "trips",
+      "population": 2964624,
+      "method": "BERNOULLI",
+      "requested_pct": 10.0,
+      "realized_pct": 9.976543399770089,
+      "n": 295767,
+      "contiguous_pct": 10.022416293907028,
+      "runs": 266124,
+      "run_starts_block_aligned": 116
+    },
+    {
+      "database": "/Users/adith/Documents/Dev/Projects/AetherQuery/aqp_eval/datasets/tpcds_sf1.duckdb",
+      "table": "store_sales",
+      "population": 2880404,
+      "method": "SYSTEM",
+      "requested_pct": 1.0,
+      "realized_pct": 0.639910234814283,
+      "n": 18432,
+      "contiguous_pct": 99.951171875,
+      "runs": 9,
+      "run_starts_block_aligned": 9
+    },
+    {
+      "database": "/Users/adith/Documents/Dev/Projects/AetherQuery/aqp_eval/datasets/tpcds_sf1.duckdb",
+      "table": "store_sales",
+      "population": 2880404,
+      "method": "SYSTEM",
+      "requested_pct": 5.0,
+      "realized_pct": 4.97707960411109,
+      "n": 143360,
+      "contiguous_pct": 99.95326450892857,
+      "runs": 67,
+      "run_starts_block_aligned": 67
+    },
+    {
+      "database": "/Users/adith/Documents/Dev/Projects/AetherQuery/aqp_eval/datasets/tpcds_sf1.duckdb",
+      "table": "store_sales",
+      "population": 2880404,
+      "method": "SYSTEM",
+      "requested_pct": 10.0,
+      "realized_pct": 9.598653522214246,
+      "n": 276480,
+      "contiguous_pct": 99.95442708333333,
+      "runs": 126,
+      "run_starts_block_aligned": 126
+    },
+    {
+      "database": "/Users/adith/Documents/Dev/Projects/AetherQuery/aqp_eval/datasets/tpcds_sf1.duckdb",
+      "table": "store_sales",
+      "population": 2880404,
+      "method": "BERNOULLI",
+      "requested_pct": 1.0,
+      "realized_pct": 1.0065601908621151,
+      "n": 28993,
+      "contiguous_pct": 1.0140378712102922,
+      "runs": 28699,
+      "run_starts_block_aligned": 14
+    },
+    {
+      "database": "/Users/adith/Documents/Dev/Projects/AetherQuery/aqp_eval/datasets/tpcds_sf1.duckdb",
+      "table": "store_sales",
+      "population": 2880404,
+      "method": "BERNOULLI",
+      "requested_pct": 5.0,
+      "realized_pct": 5.016101907926805,
+      "n": 144484,
+      "contiguous_pct": 5.078070928268874,
+      "runs": 137147,
+      "run_starts_block_aligned": 63
+    },
+    {
+      "database": "/Users/adith/Documents/Dev/Projects/AetherQuery/aqp_eval/datasets/tpcds_sf1.duckdb",
+      "table": "store_sales",
+      "population": 2880404,
+      "method": "BERNOULLI",
+      "requested_pct": 10.0,
+      "realized_pct": 10.00442993413424,
+      "n": 288168,
+      "contiguous_pct": 9.997640265400738,
+      "runs": 259358,
+      "run_starts_block_aligned": 128
+    }
+  ]
+}
